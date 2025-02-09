@@ -1,7 +1,8 @@
 import gc
 import inspect
 import textwrap
-from typing import Iterable, overload, Literal
+from typing import Iterable, Literal, overload
+
 # from types import GeneratorType
 
 
@@ -101,7 +102,7 @@ class Code:
 
     @property
     def block_text(self) -> "Code":
-        return self[self.block_start_line: self.block_end_line]
+        return self[self.block_start_line : self.block_end_line]
 
     @property
     def scope_after(self) -> "Code":
@@ -128,7 +129,7 @@ class Code:
         return level // 4
 
 
-def get_implicit_iterator_in_for_loop(a) :
+def get_implicit_iterator_in_for_loop(a):
     """gets the implicit iterator in a for loop, this is as hacky as it could be,
     reliying in python internals that are only be exposed to the garbage collector.
 
