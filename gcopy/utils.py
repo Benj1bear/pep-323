@@ -3,7 +3,7 @@ from inspect import currentframe
 from readline import get_history_item, get_current_history_length
 from dis import _unpack_opargs
 from types import FrameType, GeneratorType, CodeType, FunctionType
-from typing import Iterable, Any, Callable
+from typing import Iterable, Any, Callable, Iterator
 from opcode import opmap
 from functools import wraps
 from copy import deepcopy, copy
@@ -204,11 +204,10 @@ def code_cmp(code_obj1: CodeType, code_obj2: CodeType) -> bool:
         for (index1, opcode1, item_index1), (index2, opcode2, item_index2) in zip(
             code_setup(code_obj1), code_setup(code_obj2), strict=True
         ):
-            if opcode1 != opcode2:
-                if not similiar_opcode(
-                    code_obj1, code_obj2, opcode1, opcode2, item_index1, item_index2
-                ):
-                    return False
+            if opcode1 != opcode2 and not similiar_opcode(
+                code_obj1, code_obj2, opcode1, opcode2, item_index1, item_index2
+            ):
+                return False
     ## catch the error if the code objects are not the same length ##
     except ValueError:
         return False
@@ -218,11 +217,7 @@ def code_cmp(code_obj1: CodeType, code_obj2: CodeType) -> bool:
 def wrap(self, method: FunctionType) -> FunctionType:
     """
     wrapper function to ensure methods assigned are instance based
-    and that the dunder methods return values are wrapped in a chain object
-    if i.e. used in a binary operation or that these are left as is if
-    type casting a chain object e.g. float(chain(1)) should return 1.0
-    and its type should be float and not my_pack.chain or __main__.chain if
-    defined in program
+    and the dunder methods return values are wrapped in a Wrapper type
     """
 
     @wraps(method)  ## retains the docstring
@@ -249,10 +244,14 @@ class Wrapper:
 
     Note: type checking will fail. Therefore, you may consider monkey patching
     i.e. isinstance and issubclass if necessary.
+
+    Also, the intended use case doesn't support i.e. binary operations or type
+    casting therefore it's not support by this wrapper. The wrapper is only as
+    storage for instance based members (data and methods)
     """
 
-    def __init__(self, obj=None) -> None:
-        if obj:
+    def __init__(self, obj: Any = None) -> None:
+        if obj is not None:
             expected = self._expected
             self.obj = obj
             not_allowed = [
@@ -288,6 +287,9 @@ class Wrapper:
                 "__getstate__",
                 "__setstate__",
                 "__reduce__",
+                "__reduce_ex__",
+                "__getnewargs__",
+                "__getnewargs_ex__",
                 "__copy__",
                 "__deepcopy__",
             ]
@@ -320,7 +322,7 @@ class Wrapper:
     def __deepcopy__(self, memo: dict) -> object:
         return copier(self, deepcopy)
 
-    def __getstate__(self, FUNC) -> dict:
+    def __getstate__(self, FUNC: FunctionType = lambda x: x) -> dict:
         return {"obj": FUNC(self.obj)}
 
     def __setstate__(self, state: dict) -> None:
@@ -331,16 +333,8 @@ def is_running(iter: Iterable) -> bool:
     """Determines if an iterator is running"""
     if issubclass(type(iter), Wrapper):
         return getattr(iter, "running", False)
-    ## builtin iterators have a reduce that enables copying ##
-    ## formated i.e. as (function_iter, (instance,), index) ##
-    try:
-        index = get_iter_index(iter)
-        return index > 0 or index < -1
-    except TypeError:
-        raise TypeError(
-            "Cannot use method '__reduce__' on object %s . Try wrapping it with 'track' or 'atrack' to determine if the iterator is running"
-            % iter
-        )
+    index = get_iter_index(iter)
+    return index > 0 or index < -1
 
 
 memory_iterator = type(iter(memoryview(bytearray())))
@@ -350,7 +344,15 @@ def get_iter_index(iterator: Iterable) -> int:
     """Gets the current builtin iterators index"""
     if isinstance(iterator, memory_iterator):
         return SetIteratorView(iterator).set
-    reduction = iterator.__reduce__()
+    try:
+        ## builtin iterators have a reduce that enables copying ##
+        ## formated i.e. as (function_iter, (instance,), index) ##
+        reduction = iterator.__reduce__()
+    except TypeError:
+        raise TypeError(
+            "Cannot use method '__reduce__' on object %s . Try wrapping it with 'track' or 'atrack' to determine if the iterator is running"
+            % iter
+        )
     if isinstance(reduction[-1], int):
         return reduction[-1]
     elif reduction[0] == enumerate:
@@ -399,7 +401,7 @@ class SetIteratorView(Structure):
         ("size", c_ssize_t),  # original size
     ]
 
-    def __init__(self, set_or_dict_key_iterator) -> None:
+    def __init__(self, set_or_dict_key_iterator: Iterable | Iterator) -> None:
         c_iterator = cast(id(set_or_dict_key_iterator), POINTER(SetIteratorView))
         for attr in self._fields_:
             attr = attr[0]

@@ -198,6 +198,7 @@ def test_is_running() -> None:
 
     test(range(3))
     ## requiring c level memory access ##
+    test(memoryview(bytearray([1, 2, 3])))
     test({1, 2, 3})
     test(frozenset({1, 2, 3}))
     test({"a": 1, "b": 2, "c": 3})

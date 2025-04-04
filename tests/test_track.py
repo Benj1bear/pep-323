@@ -2,6 +2,20 @@ from gcopy.track import *
 import asyncio
 
 
+def iter_init(obj: Iterable | Iterator) -> Iterable:
+    """Initializes iterators (for testing)"""
+    if obj.__name__ in ("memoryview",):
+        return iter(obj(b"abcedfg"))
+    elif obj.__name__ in ("enumerate", "reversed"):
+        return iter(obj([]))
+    elif obj.__name__ == "range":
+        return iter(obj(2))
+    elif obj.__name__ in ("zip", "filter", "map"):
+        return iter(obj([], []))
+    else:
+        return iter(obj())
+
+
 def test_track_adjust() -> None:
     dct = {".mapping": [34, 35, 74], ".34": None, ".35": None, ".74": None}
     assert track_adjust(dct)
@@ -18,15 +32,14 @@ def test_track_shift() -> None:
 
 
 def test_patch_iterators() -> None:
-    if isinstance(__builtins__, dict):
-        objs = __builtins__.items()
-    else:
-        objs = vars(__builtins__).items()
     patch_iterators(globals())
-    for name, obj in objs:
-        if isinstance(obj, type) and issubclass(obj, Iterator | Iterable):
-            iter_init(obj)
+    iterators = get_builtin_iterators()
+    for name in iterators:
+        assert type(globals()[name]) == track
     ## unpatch the iters ##
+    unpatch_iterators(globals())
+    for name in iterators:
+        assert globals().get(name, None) is None
     ## try in local scope only ##
 
 

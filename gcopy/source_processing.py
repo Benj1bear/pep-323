@@ -5,6 +5,7 @@ from .utils import *
 from inspect import getsource, findsource, signature
 from typing import Iterable, Any
 from types import GeneratorType, FunctionType, CellType  # , FrameType ## lineno_adjust
+from functools import partial
 
 ## to ensure gcopy.custom_generator.Generator can be used in exec for sign ##
 import gcopy
@@ -114,7 +115,7 @@ def update_line(
         return
     ## collect strings
     if char == "'" or char == '"':
-        line, prev = string_collector_proxy(index, char, prev, source_iter, line)
+        line, prev, _ = string_collector_proxy(index, char, prev, source_iter, line)
         return
     ## we're only interested in when the generator expression ends in terms of the depth ##
     depth = update_depth(depth, char)
@@ -167,12 +168,14 @@ def unpack_genexpr(source: str) -> list[str]:
     return lines[1:] + [" " * (4 * len(lines)) + "return " + lines[0]]
 
 
-def skip_line_continuation(source_iter: Iterable, source: str, index: int) -> None:
+def skip_line_continuation(source_iter: Iterable, source: str, index: int) -> int:
     """skips line continuations in source"""
     whitespace = get_indent(source[index + 1 :])  ## +1 since 'index:' is inclusive ##
     ## skip the whitespace after newline ##
     ## skip the current char, whitespace, newline and whitespace after ##
-    skip(source_iter, whitespace + 1 + get_indent(source[index + 1 + whitespace + 1 :]))
+    index += whitespace + 1 + get_indent(source[index + 1 + whitespace + 1 :])
+    skip(source_iter, index)
+    return index
 
 
 def skip_source_definition(source: str) -> str:
@@ -204,21 +207,29 @@ def skip_source_definition(source: str) -> str:
 
 def collect_string(
     source_iter: Iterable, index: int, reference: str, source: str = None
-) -> tuple[int, str | list[str]]:
+) -> tuple[int, str | list[str], int]:
     """
     Collects strings in an iterable assuming correct
     python syntax and the char before is a qoutation mark
 
     Note: make sure source_iter is an enumerated type
     """
-    line, backslash, left_brace, lines = reference, False, 0, []
+    line, backslash, left_brace, lines, fixed_lines = reference, False, 0, [], 0
     for index, char in source_iter:
+        if char == "\n":
+            fixed_lines += 1
         ## detect f-strings for value yields ##
         if source and char == "{" or left_brace:
             if char != "{" and left_brace % 2:
                 ## we could check for yields before unpacking but this is maybe more efficient ##
-                adjustments, f_string_contents, _ = unpack(
-                    char, source_iter, source, True, index=index
+                ## especially since you can have f-strings within f-strings ##
+                adjustments, f_string_contents, _, fixed_lines = unpack(
+                    char,
+                    source_iter,
+                    source,
+                    True,
+                    index=index,
+                    fixed_lines=fixed_lines,
                 )
                 ## update ##
                 lines += adjustments
@@ -234,13 +245,17 @@ def collect_string(
         if char == "\\":
             backslash = True
     if source:
-        return index, lines + [line]  ## we have to add it for the f-string case ##
-    return index, line
+        return (
+            index,
+            lines + [line],
+            fixed_lines,
+        )  ## we have to add it for the f-string case ##
+    return index, line, fixed_lines
 
 
 def collect_multiline_string(
     source_iter: Iterable, index: int, reference: str, source: str = None
-) -> tuple[int, str | list[str]]:
+) -> tuple[int, str | list[str], int]:
     """
     Collects multiline strings in an iterable assuming
     correct python syntax and the char before is a
@@ -251,14 +266,29 @@ def collect_multiline_string(
     if a string starts with 3 qoutations
     then it's classed as a multistring
     """
-    line, backslash, prev, count, left_brace, lines = reference, False, -2, 0, 0, []
+    line, backslash, prev, count, left_brace, lines, fixed_lines = (
+        reference,
+        False,
+        -2,
+        0,
+        0,
+        [],
+        0,
+    )
     for index, char in source_iter:
+        if char == "\n":
+            fixed_lines += 1
         ## detect f-strings for value yields ##
         if source and char == "{" or left_brace:
             if char != "{" and left_brace % 2:
                 ## we could check for yields before unpacking but this is maybe more efficient ##
-                adjustments, f_string_contents, _ = unpack(
-                    char, source_iter, source, True, index=index
+                adjustments, f_string_contents, _, fixed_lines = unpack(
+                    char,
+                    source_iter,
+                    source,
+                    True,
+                    index=index,
+                    fixed_lines=fixed_lines,
                 )
                 ## update ##
                 lines += adjustments
@@ -280,8 +310,12 @@ def collect_multiline_string(
         if char == "\\":
             backslash = True
     if source:
-        return index, lines + [line]  ## we have to add it for the f-string case ##
-    return index, line
+        return (
+            index,
+            lines + [line],
+            fixed_lines,
+        )  ## we have to add it for the f-string case ##
+    return index, line, fixed_lines
 
 
 def string_collector_proxy(
@@ -291,7 +325,7 @@ def string_collector_proxy(
     iterable: Iterable,
     line: str = None,
     f_string: bool = False,
-) -> tuple[str, tuple[int, int, str], list[str]]:
+) -> tuple[str, tuple[int, int, str], list[str], int]:
     """Proxy function for usage when collecting strings since this block of code gets used repeatedly"""
     ## get the string collector type ##
     if prev[0] + 2 == prev[1] + 1 == index and prev[2] == char:
@@ -309,16 +343,16 @@ def string_collector_proxy(
         ## use the source to determine the extractions ##
         ## +1 to move one forwards from the 'f' ##
         source = line[1 - temp_index :]
-    temp_index, temp_line = string_collector(iterable, index, char, source)
+    temp_index, temp_line, fixed_lines = string_collector(iterable, index, char, source)
     prev = (index, temp_index, char)
     if f_string:
         if source:
             ## lines (adjustments) + line (string collected) ##
-            return temp_line.pop(), prev, temp_line
-        return temp_line, prev, []
+            return temp_line.pop(), prev, temp_line, fixed_lines
+        return temp_line, prev, [], fixed_lines
     if line is not None:
         line += temp_line
-    return line, prev
+    return line, prev, fixed_lines
 
 
 def inverse_bracket(bracket: str) -> str | None:
@@ -344,6 +378,7 @@ def named_adjust(
     index: int = 0,
     depth_total: int = 0,
     depths: dict = {},
+    fixed_lines: int = 0,
 ) -> tuple[str, list[str], str, dict]:
     """
     Adjusts the lines and final line for named expressions
@@ -364,7 +399,7 @@ def named_adjust(
     temp = []
     if ID and lines:
         temp = [lines.pop()]
-    line, lines, final_line, named, depths = update_lines(
+    line, lines, final_line, named, depths, fixed_lines = update_lines(
         line,
         lines,
         final_line,
@@ -375,9 +410,10 @@ def named_adjust(
         unwrapping=True,
         depth_total=depth_total,
         depths=depths,
+        fixed_lines=fixed_lines,
     )
     lines += temp
-    return line, lines, final_line, depths
+    return line, lines, final_line, depths, fixed_lines
 
 
 def unpack_adjust(line: str) -> list[str]:
@@ -406,6 +442,7 @@ def update_lines(
     unwrapping: bool = False,
     depth_total: int = 0,
     depths: dict = {},
+    fixed_lines: int = 0,
 ) -> tuple[str, list[str], str, bool, dict]:
     """
     adds the current line or the unwrapped line to the lines
@@ -415,7 +452,7 @@ def update_lines(
     if not line.isspace():
         ## unwrapping ##
         if unwrap:
-            temp_lines, temp_final_line, _ = unpack(
+            temp_lines, temp_final_line, _, fixed_lines = unpack(
                 source_iter=unwrap,
                 source=source,
                 unwrapping=True,
@@ -423,6 +460,7 @@ def update_lines(
                 index=index,
                 # depth_total=depth_total,
                 # depths=depths,
+                fixed_lines=fixed_lines,
             )
             if yielding:
                 ## we have to :-1 since the end bracket gets added ##
@@ -450,7 +488,26 @@ def update_lines(
             line = ""
     if operator:
         final_line += " " + operator
-    return line, lines, final_line, named, depths
+    return line, lines, final_line, named, depths, fixed_lines
+
+
+def is_item(source: str) -> bool:
+    """
+    Determines if the source is a valid item
+
+    Note: we need to place the source inside
+    a function in case of i.e. 'yield'
+    """
+    ## remove any key words it starts with ##
+    source = source.lstrip()
+    for keyword in ("return ", "yield ", "await ", "if ", "elif ", "while "):
+        if source.startswith(keyword):
+            source = source[len(keyword) :].lstrip()
+    try:
+        compile("def temp():" + source, "", "exec")
+        return True
+    except SyntaxError:
+        return False
 
 
 def unpack(
@@ -463,13 +520,16 @@ def unpack(
     depth_total: int = 0,
     depths: dict = {},
     in_ternary_else: bool = False,
-) -> tuple[list[str], str, int]:
+    fixed_lines: int = 0,
+    signature: bool = False,
+) -> tuple[list[str], str, int, int]:
     """
     Unpacks value yields from a line into a
     list of lines going towards its right side
 
     Note:
-    depths = {index of the last depth, bracket, equals position, comma position, lines indexes}
+    depths = {index of the last depth, bracket, equals position, comma position, lines index}
+    Note: lines indexes are relative to what lines are currently available e.g. the line variable
     """
     if line is None:
         line_iter = empty_generator()
@@ -496,16 +556,20 @@ def unpack(
         ## record the source for string_collector_proxy (there might be better ways of doing this) ##
         ## collect strings and add to the lines ##
         if char == "'" or char == '"':
-            temp_line, prev, temp_lines = string_collector_proxy(
+            temp_line, prev, temp_lines, temp_fixed_lines = string_collector_proxy(
                 end_index, char, prev, line_iter, line, True
             )
             line += temp_line
             lines += temp_lines
+            fixed_lines += temp_fixed_lines
         elif char == " ":
             line, space, indented = singly_space(end_index, char, line, space, indented)
+            ## relies on the length of the line ##
+            if depth_total in depths:
+                depths[depth_total][0] -= 1
         ## dictionary assignment ##
         elif char == "[" and prev[-1] not in (" ", ""):
-            line, lines, final_line, named, depths = update_lines(
+            line, lines, final_line, named, depths, fixed_lines = update_lines(
                 line + char,
                 lines,
                 final_line,
@@ -515,50 +579,63 @@ def unpack(
                 index=end_index,
                 depth_total=depth_total,
                 depths=depths,
+                fixed_lines=fixed_lines,
             )
         elif char == "\\":
-            skip_line_continuation(line_iter, line, end_index)
             if space + 1 != end_index:
                 line += " "
                 space = end_index
+            new_index = skip_line_continuation(line_iter, line, end_index)
+            if depth_total in depths:
+                depths[depth_total][0] = depths[depth_total][0] - new_index - end_index
         ## splitting operators ##
-        elif char in operators:
-
+        elif char in ",=" or char in operators and is_item(line):
             ## maybe replace operator with next_char ##
             if in_ternary_else:
                 if char == "=" and source[end_index + 1 : end_index + 2] != "=":
                     try_set(depths.get(depth_total, None), 2, None)
+                    line += char
                     break
                 elif char == ",":
+                    line += char
                     break
 
+            flag = signature and char in ",="
+            if flag:
+                line += char
             ## since we can have i.e. ** or %= etc. ##
             if end_index - 1 != operator:
                 if char == "=":
                     try_set(depths.get(depth_total, None), 2, None)
-                line, lines, final_line, named, depths = update_lines(
-                    line,
-                    lines,
-                    final_line,
-                    named,
-                    operator=char,
-                    source=source,
-                    index=end_index,
-                    depth_total=depth_total,
-                    depths=depths,
-                )
+                ## for definitions ##
+                if not flag:
+                    line, lines, final_line, named, depths, fixed_lines = update_lines(
+                        line,
+                        lines,
+                        final_line,
+                        named,
+                        operator=char,
+                        source=source,
+                        index=end_index,
+                        depth_total=depth_total,
+                        depths=depths,
+                        fixed_lines=fixed_lines,
+                    )
             else:
                 key = {"=": 2, ",": 3}.get(char, None)
                 try_set(depths.get(depth_total, None), key, len(line))
-                final_line += char
+                if not flag:
+                    final_line += char
             operator = end_index
         ## split and break condition ##
         elif depth == 0 and char in "#:;\n":
             if char == ":":
                 line += ":"
             break
+        elif char == "\n":
+            fixed_lines += 1
         elif char == ":":  ## must be a named expression if depth is not zero ##
-            line, lines, final_line, depths = named_adjust(
+            line, lines, final_line, depths, fixed_lines = named_adjust(
                 line,
                 lines,
                 final_line,
@@ -568,6 +645,7 @@ def unpack(
                 end_index,
                 depth_total,
                 depths,
+                fixed_lines,
             )
             named = False
             ## since we're going to skip some chars ##
@@ -595,9 +673,13 @@ def unpack(
                 ):
                     if not in_ternary_else:
                         line += char
-                    break
+                    # print(unwrapping , depth_total < 0 , char != inverse_bracket(depths.get(depth_total, (0, ""))[1]))
+                    if depth_total < 0:
+                        break
                 if char == ")":
                     depth -= 1
+                    if depth == 0:
+                        depths["in_definition"] = False
             ## check for unwrapping/updating ##
             if char.isalnum():
                 ## in case of ... ... (otherwise you keep appending the ID) ##
@@ -607,7 +689,16 @@ def unpack(
                 if in_ternary_else and ID == "else":
                     line = line[:-3]
                     break
-                adjusted, line, lines, final_line, named, depth, depth_total = check_ID(
+                (
+                    adjusted,
+                    line,
+                    lines,
+                    final_line,
+                    named,
+                    depth,
+                    depth_total,
+                    fixed_lines,
+                ) = check_ID(
                     ID,
                     source_iter,
                     source,
@@ -615,7 +706,6 @@ def unpack(
                     source[end_index + 1 : end_index + 2],
                     end_index,
                     depths,
-                    unwrapping,
                     line,
                     lines,
                     final_line,
@@ -624,6 +714,8 @@ def unpack(
                     index,
                     depth,
                     depth_total,
+                    fixed_lines,
+                    in_ternary_else,
                 )
                 if adjusted:
                     ID, prev = "", prev[:-1] + (char,)
@@ -636,8 +728,8 @@ def unpack(
     if line:
         final_line += line
     if in_ternary_else:
-        return lines, final_line, end_index, depths, depth_total
-    return lines, final_line, end_index
+        return lines, final_line, end_index, depths, depth_total, fixed_lines
+    return lines, final_line, end_index, fixed_lines
 
 
 def get_unpacked_lines(lines: str, reference: int | None) -> list[str]:
@@ -657,9 +749,10 @@ def unpack_ternary(
     index: int,
     depth_total: int,
     depths: dict,
+    fixed_lines: int,
 ) -> tuple[list[str], str, int, list[str], list[str]]:
     """unpacks the ternary expression and retrieves any new lines"""
-    lines, final_line, end_index, depths, depth_total = unpack(
+    lines, final_line, end_index, depths, depth_total, fixed_lines = unpack(
         "",
         source_iter,
         source,
@@ -669,9 +762,10 @@ def unpack_ternary(
         depth_total,
         depths,
         True,
+        fixed_lines=fixed_lines,
     )
     temp_lines, lines = get_unpacked_lines(lines, reference)
-    return lines, end_index, final_line, temp_lines, depths, depth_total
+    return lines, end_index, final_line, temp_lines, depths, depth_total, fixed_lines
 
 
 def clean_block(block: str) -> str:
@@ -692,7 +786,6 @@ def check_ID(
     next_char: str,
     end_index: int,
     depths: dict,
-    unwrapping: bool,
     line: str,
     lines: list[str],
     final_line: str,
@@ -701,17 +794,37 @@ def check_ID(
     index: int,
     depth: int = 0,
     depth_total: int = 0,
+    fixed_lines: int = 0,
+    in_ternary_else: bool = False,
 ) -> tuple[str, bool, bool]:
     """Checks the ID for updating the line"""
     adjusted = False
-    if ID == "lambda" and next_char in " :\\":
-        _, lines = collect_lambda(line, source_iter, source, (0, 0, ""))
+    if line.startswith("@"):
+        final_line += "@" + ID
+        for index, char in source_iter:
+            final_line += char
+            if char == "(":
+                break
+        line, adjusted = "", True
+    if ID == "def" and next_char == " ":
+        final_line += line + "f"
+        for index, char in source_iter:
+            final_line += char
+            if char == "(":
+                break
+        line, adjusted = "", True
+    elif ID == "lambda" and next_char in " :\\":
+        line += "a"
+        temp = collect_lambda(line, source_iter, source, (0, 0, ""), index)
+        lines += temp[0]
+        line = temp[1]
+        fixed_lines += temp[2]
         adjusted = True
     ## unwrapping ##
     elif depth and ID == "yield" and next_char in " )]}\n;\\":
         ## what should happen when we unwrap? ##
         ## go from the last bracket onwards for the replacement ##
-        line, lines, final_line, named, depths = update_lines(
+        line, lines, final_line, named, depths, fixed_lines = update_lines(
             line,
             lines,
             final_line,
@@ -723,6 +836,7 @@ def check_ID(
             index=end_index,
             depth_total=depth_total,
             depths=depths,
+            fixed_lines=fixed_lines,
         )
         bracket_index = None
         ## since the unwrapping will accumulate up to the next bracket this ##
@@ -733,7 +847,10 @@ def check_ID(
         depth_total -= 1
         adjusted = True  ## to avoid: line += char (we include it in the final_line as the operator or in unwrapping)
     elif 1 < len(ID) < 4 and ID in ("and", "or", "is", "in"):
-        line, lines, final_line, named = update_lines(
+        print(line, final_line)
+        print("HERE!!!!!!!!!")
+        line = line[: -len(ID)]
+        line, lines, final_line, named, depths, fixed_lines = update_lines(
             line,
             lines,
             final_line,
@@ -743,6 +860,7 @@ def check_ID(
             index=end_index,
             depth_total=depth_total,
             depths=depths,
+            fixed_lines=fixed_lines,
         )
         adjusted = True
     ## I don't think you can have a value yield in a 'case' statement otherwise this too is in here ##
@@ -758,127 +876,227 @@ def check_ID(
             # 1. once you hit an if make sure the unpacking of it and itself
             ## comes before the last unpacking
             # 2. else statements just get added to the new lines
-            reference = depths.get(depth_total, 0)
 
-            if reference != 0:
-                ## -1 since the 'f' in 'if' has not been added ##
-                if_block = line[reference[0] : -1]
-                # final_line += line[: reference[0] + 1]
+            ## Note: reason why the default is 0 is to ensure the ##
+            ## lines are adjusted according to reference[-1] e.g. ##
+            ## the current lines index at the depth of interest   ##
+            reference = depths.get(depth_total, [0, " ", 0])
+            if not in_ternary_else:
+                depths["reference"] = len(lines)
+                pop_forward = reference[1] in "({["
+            reference = reference.pop()
+            # print(reference,"|||||", len(line), index, end_index)
+            # print(source[index:])
+            # print(line)
+            # print(final_line)
+            # line = line[: -len(ID) + 1]
+            if_block = temp_line
 
-                # NOTE: need to check/test the poping order #
+            ##############
+            ## If block ##
+            ##############
 
-                if reference[1] in "({[":
-                    ## unwrapping ##
-                    line += "locals()['.internals']['.args'].pop()"
-                else:
-                    ## unpacking ##
-                    line += "locals()['.internals']['.args'].pop(0)"
-                reference = reference[-1]
-            else:
-                ## -1 to get rid of the i in 'if' ##
-                if_block = line[:-1]
-                line += "locals()['.internals']['.args'].pop(0)"
             ## line should be empty ##
             line = ""
             ## run it through unpack returning on ternary else ##
             ## then putting that current line as locals()['.internals']['.args'] ##
             if_block_lines, lines = get_unpacked_lines(lines, reference)
-            lines, end_index, if_condition, if_condition_lines, depths, depth_total = (
-                unpack_ternary(
-                    reference,
-                    source_iter,
-                    source,
-                    named,
-                    index,
-                    depth_total,
-                    depths,
-                )
+            (
+                lines,
+                end_index,
+                if_condition,
+                if_condition_lines,
+                depths,
+                depth_total,
+                fixed_lines,
+            ) = unpack_ternary(
+                reference,
+                source_iter,
+                source,
+                named,
+                index,
+                depth_total,
+                depths,
+                fixed_lines,
             )
+
+            ################
+            ## else block ##
+            ################
+
             length = len(lines)
             ## then run it through unpack one more time to get the rest of the ternary else ##
-            lines, end_index, else_block, else_block_lines, depths, depth_total = (
-                unpack_ternary(
-                    reference,
-                    source_iter,
-                    source,
-                    named,
-                    end_index,
-                    depth_total,
-                    depths,
-                )
+            (
+                lines,
+                end_index,
+                else_block,
+                else_block_lines,
+                depths,
+                depth_total,
+                fixed_lines,
+            ) = unpack_ternary(
+                reference,
+                source_iter,
+                source,
+                named,
+                end_index,
+                depth_total,
+                depths,
+                fixed_lines,
             )
+            if else_block:
+                if else_block[-1] in ",=":
+                    depths["char"] = else_block[-1]
+                    else_block = else_block[:-1]
+                depths["else_block"] = else_block
             ## add all the lines ##
             if_block = ["    " + clean_block(if_block)]
             else_block = ["    " + clean_block(else_block)]
             diff = len(lines) - length
-            ## remove the 'not' (only temporary until it's found out why it's not working) ##
-            if diff and not else_block[0].isspace():
-                else_block = indent_lines(lines[reference:diff])
-                lines = lines[:reference]
-            upper = (
+            replace = False
+            if diff:
+                if else_block[0].isspace():
+                    temp_index = depths.pop("diff")
+                    ## the entire block is the else_block ##
+                    if temp_index[1] is None:
+                        else_block = indent_lines(lines[temp_index[0] :])
+                        lines = lines[: temp_index[0]]
+                    ## the if block is the else block ##
+                    else:
+                        replace = True
+                        else_block = indent_lines(
+                            lines[temp_index[0] : temp_index[1]],
+                            -4 * (temp_index[2] - 1),
+                        )
+                else:
+                    else_block = indent_lines(lines[reference:diff])
+                    lines = lines[:reference]
+            new_lines = (
                 if_condition_lines
                 + ["if " + if_condition + ":"]
-                + indent_lines(if_block_lines)
-            )
-            new_lines = (
-                upper
+                + indent_lines(if_block_lines)  ## just extract this ##
                 + if_block
                 + ["else:"]
                 + indent_lines(else_block_lines)
                 + else_block
             )
-            replace = depths.pop("flag", None)
-            if replace is not None:
-                lines = lines[:replace] + indent_lines(new_lines) + lines[replace:]
+            ## if missing an else block it'll be in the previous if_block otherwise the prevous ##
+            ## ternary expression is the else block, we get indicated whether or not there was a ##
+            ## previous if block incomplete by the frame before ##
+            if replace:
+                # print("-----------------------------")
+                # print(new_lines)
+                # print(lines[temp_index[0]: temp_index[1]])
+                # print("-----------------------------")
+                lines[temp_index[0] : temp_index[1]] = indent_lines(
+                    new_lines, 4 * temp_index[2]
+                )
             else:
                 lines += new_lines
-            if if_block[0].isspace():
-                ## makes sure on return in the recursion that the recieving ##
-                ## frame puts itself into the previous frames if block ##
-                upper = reference + len(upper)
-                depths["flag"] = upper
-            # char = source[end_index]
-            # if char in operators:
-            #     final_line += char
+            check = if_block[0:1]
+            ## depth > 0 should also work e.g. depths in further blocks should be < 0 ##
+            if (replace == False or depths.get("depth", depth) >= depth) and not (
+                check and check[0].lstrip().startswith("if ")
+            ):
+                base = length + len(if_condition_lines) + 1
+                ## because it's replaced we need to ensure it's adjusted correctly ##
+                indent = 1
+                if replace:
+                    base += temp_index[0]
+                    indent += get_indent(check[0]) // 4
+                depths["diff"] = (base, base + len(if_block_lines + if_block), indent)
+                depths["depth"] = depth
+            else:
+                # print("DEPTH:", depth, depths["depth"])
+                # print(check[0], "----------------------")
+                depths["diff"] = (length, None)
+            if not in_ternary_else:
+                if pop_forward:
+                    final_line += "locals()['.internals']['.args'].pop(0)"
+                else:
+                    final_line += "locals()['.internals']['.args'].pop()"
+                reference = depths.pop("reference")
+                char, else_block = depths.pop("char", ""), depths.pop("else_block", "")
+                if depth == 0:
+                    else_block = ""
+                lines[reference:] = ternary_adjust(lines[reference:])
+                final_line += char + else_block
         else:
             final_line += ID + " "
             line = temp_line
         adjusted = True
-    return adjusted, line, lines, final_line, named, depth, depth_total
+    return adjusted, line, lines, final_line, named, depth, depth_total, fixed_lines
 
 
-def collect_definition(
-    start_index: int,
-    lines: list[str],
-    lineno: int,
-    source: str,
-    source_iter: Iterable,
-    reference_indent: int,
-    decorator: bool = False,
-) -> tuple[int, str, int, list[str]]:
+def ternary_adjust(lines: list[str]) -> list[str]:
+    def check(line: str) -> bool:
+        try:
+            temp_line = line[0].strip()
+        except:
+            return True
+        return (
+            temp_line.startswith("if ")
+            or temp_line.startswith("else ")
+            or temp_line.startswith("else:")
+        )
+
+    line_iter = enumerate(lines)
+    for index, line in line_iter:
+        if check(line) == False and check(lines[index + 1 : index + 2]):
+            lines[index] = (
+                " " * get_indent(line)
+                + "locals()['.internals']['.args'] += [%s]" % line.strip()
+            )
+            next(line_iter, None)
+    return lines
+
+
+def collect_definition(self, start_index: int, reference_indent: int) -> None:
     """
     Collects a block of code from source, specifically a
     definition block in the case of this modules use case
     """
-    if decorator:
-        lines += ["@locals()['.internals']['.decorator']"]
-    indent = reference_indent + 1
-    while reference_indent < indent:
+    name, args = get_signature(self.line, True)
+    if args:
+        lines, line, _, fixed_lines = unpack("", enumerate(args), args, signature=True)
+        self.lines += lines + [
+            " " * get_indent(self.line) + "def " + name + "(%s):" % line
+        ]
+        self.fixed_lines += fixed_lines
+        start_index = len(self.line) + 1
+
+    def skip_line(self, start_index: int) -> tuple[int, int]:
         ## we're not specific about formatting the definitions ##
         ## we just need to make sure to include them ##
-        for end_index, char in source_iter:
+        prev = (0, 0, "")
+        for self.index, self.char in self.source_iter:
+            if self.char == "'" or self.char == '"':
+                _, prev, _, fixed_lines = string_collector_proxy(
+                    self.index,
+                    self.char,
+                    prev,
+                    self.source_iter,
+                    self.line,
+                    self.source,
+                )
+                self.lineno += fixed_lines
             ## newline ##
-            if char == "\n":
+            elif self.char == "\n":
                 break
         ## add the line and get the indentation to check if continuing ##
-        lineno += 1
-        lines += [source[start_index:end_index]]
-        indent = get_indent(source[end_index + 1 :])
-        start_index = end_index + 1
-    if char != "\n":
-        lines[-1] += char
-    ## make sure to return the index and char for the indentation ##
-    return end_index, char, lineno, lines
+        self.lineno += 1
+        self.lines += [self.source[start_index : self.index]]
+        indent = get_indent(self.source[self.index + 1 :])
+        start_index = self.index + 1
+        return indent, start_index
+
+    if self.source[self.index] != "\n":
+        indent, start_index = skip_line(self, start_index)
+    indent = reference_indent + 1
+    while reference_indent < indent:
+        indent, start_index = skip_line(self, start_index)
+    if self.char != "\n":
+        self.lines[-1] += self.char
 
 
 ## Note: line.startswith("except") will need to put a try statement in front (if it's not there e.g. is less than the minimum indent) ##
@@ -1266,7 +1484,7 @@ def yield_adjust(temp_line: str, indent: str) -> list[str]:
     temp_line: line trimmed at the start by its indent
     indent: the current indent in string form
     """
-    if temp_line.startswith("yield from "):
+    if temp_line[:6] == "yield " and temp_line[5:].lstrip().startswith("from "):
         return [
             ## 11 to get past the yield from
             indent
@@ -1318,6 +1536,7 @@ def extract_source_from_comparison(
     extractor: FunctionType,
     globals: dict = None,
     locals: dict = None,
+    mode: str = "eval",
 ) -> str:
     """
     Extracts source via a comparison of
@@ -1335,6 +1554,14 @@ def extract_source_from_comparison(
         "co_varnames",
         "co_name",
     )
+    executor = eval
+    if mode == "exec":
+
+        def exec_proxy(name: str, source: str, globals: dict, locals: dict):
+            exec(source, globals, locals)
+            return currentframe().f_locals.get(name, None)
+
+        executor = partial(exec_proxy, code_obj.co_name)
     if isinstance(source, list):
         source = "".join(source)
     extracing_genexpr = getcode(extractor).co_name == "extract_genexpr"
@@ -1343,14 +1570,19 @@ def extract_source_from_comparison(
             ## eval should be safe here assuming we have correctly extracted the expression - we can't use compile because it gives a different result ##
             temp_source = source[col_offset:end_col_offset]
             try:
-                genexpr = eval(temp_source, globals, locals)
+                genexpr = executor(temp_source, globals, locals)
             except NameError as e:
                 if not extracing_genexpr:
                     raise e
                 ## NameError since genexpr's first iterator is stored as .0 ##
                 name = e.args[0].split("'")[1]
-                genexpr = eval(temp_source, globals, locals | {name: locals[".0"]})
-            temp_code = getcode(genexpr)
+                genexpr = executor(temp_source, globals, locals | {name: locals[".0"]})
+            try:
+                temp_code = getcode(genexpr)
+                if temp_code.co_name != code_obj.co_name:
+                    continue
+            except AttributeError:
+                continue
             ## attr_cmp should get most simple cases, code_cmp should cover nonlocal + closures ideally ##
             if attr_cmp(temp_code, code_obj, attrs) or code_cmp(temp_code, code_obj):
                 return temp_source
@@ -1373,7 +1605,9 @@ def expr_getsource(FUNC: Any) -> str:
     take a list instead
     """
     code_obj = getcode(FUNC)
-    if code_obj.co_name == "<lambda>":
+    name = code_obj.co_name
+    mode = "eval"
+    if name == "<lambda>":
         ## here source is a : str
         if is_cli():
             source = cli_findsource()
@@ -1389,7 +1623,7 @@ def expr_getsource(FUNC: Any) -> str:
             frame = getframe(FUNC)
             globals = frame.f_globals
             locals = frame.f_locals
-    else:
+    elif name == "<genexpr>":
         frame = getframe(FUNC)
         ## here source is a : list[str]
         if is_cli():
@@ -1400,7 +1634,27 @@ def expr_getsource(FUNC: Any) -> str:
         extractor = extract_genexpr
         globals = frame.f_globals
         locals = frame.f_locals
-    return extract_source_from_comparison(code_obj, source, extractor, globals, locals)
+    ## function generators ##
+    elif name.isidentifier():
+        if is_cli():
+            source = cli_findsource()
+        else:
+            lineno = code_obj.co_firstlineno - 1
+            source = findsource(code_obj)[0][lineno:]
+        extractor = extract_function
+        if isinstance(FUNC, FunctionType):
+            globals = FUNC.__globals__
+            locals = get_nonlocals(FUNC)
+        else:
+            frame = getframe(FUNC)
+            globals = frame.f_globals
+            locals = frame.f_locals
+        mode = "exec"
+    else:
+        raise TypeError("Unexpected object does not have a source extractor")
+    return extract_source_from_comparison(
+        code_obj, source, extractor, globals, locals, mode
+    )
 
 
 def extract_genexpr(
@@ -1419,7 +1673,7 @@ def extract_genexpr(
     for index, char in source_iter:
         ## skip all strings if not in genexpr
         if char == "'" or char == '"':
-            _, prev = string_collector_proxy(index, char, prev, source_iter)
+            _, prev, _ = string_collector_proxy(index, char, prev, source_iter)
         elif ID == "for" and char in " \\":
             if genexpr_depth and depth > genexpr_depth:
                 temp_source = source[temp_col_offset:]
@@ -1458,7 +1712,7 @@ def extract_lambda(source_code: str, recursion: bool = False) -> GeneratorType:
     for index, char in source_iter:
         ## skip all strings (we only want the offsets)
         if char == "'" or char == '"':
-            _, prev = string_collector_proxy(index, char, prev, source_iter)
+            _, prev, _ = string_collector_proxy(index, char, prev, source_iter)
         elif lambda_depth is not None and (char in "\n;," or depth + 1 == lambda_depth):
             # lambda_depth needed in case of brackets; depth + 1 since depth would've got reduced by 1
             yield col_offset, index
@@ -1509,7 +1763,9 @@ def except_adjust(
             break
     number_of_indents = reference_indent + 8
     current_indent = " " * number_of_indents
+    # print(current_lines, exception_lines)
     return (
+        # [" " * reference_indent + "try:"]
         current_lines[:-index]
         + [" " * reference_indent + "try:"]
         + current_lines[-index:]
@@ -1518,15 +1774,61 @@ def except_adjust(
             current_indent
             + "locals()['.internals']['.error'] = locals()['.internals']['.exc_info']()[1]",
         ]
-        + indent_lines(exception_lines, number_of_indents)
-        + [current_indent + "raise locals()['.internals']['.error']"]
-        + [final_line]
+        # + indent_lines(exception_lines, number_of_indents)
+        + except_catch_adjust(final_line, exception_lines)
+    ), reference_indent
+
+
+def extract_as(line: str) -> tuple[str, str]:
+    """splits a line by its 'as' keyword"""
+    line_iter, prev, ID = enumerate(line), (0, 0, ""), ""
+    for index, char in line_iter:
+        if char == "'" or char == '"':
+            _, prev, _ = string_collector_proxy(
+                index,
+                char,
+                prev,
+                line_iter,
+            )
+        if char.isalnum():
+            ID += char
+        else:
+            if char == " " and ID == "as":
+                return line[: index - 3], line[index:]
+            ID = ""
+    return line, ""
+
+
+def except_catch_adjust(line: str, lines: list[str]) -> list[str]:
+    indent = get_indent(line)
+    ## length of except is 6, -1 to remove the end colon ##
+    line = line[indent + 6 : -1]
+    ## extract the 'as' keyword position ##
+    line, as_keyword = extract_as(line)
+    if as_keyword:
+        as_keyword = [
+            " " * (indent + 8) + as_keyword + " = locals()['.internals']['.error']"
+        ]
+    else:
+        as_keyword = []
+    return (
+        indent_lines(lines, indent + 4)
+        + [
+            " " * (indent + 4)
+            + "if isinstance(locals()['.internals']['.error'], "
+            + line
+            + "):",
+            " " * (indent + 8) + "locals()['.continue_error'] = False",
+            # " " * (indent + 4) + "else:",
+            # " " * (indent + 8),
+        ]
+        + as_keyword
     )
 
 
 def singly_space(
     index: int, char: str, line: str, space: int, indented: bool
-) -> tuple[str, int, bool]:
+) -> tuple[str, int, int]:
     """For ensuring all spaces in a line are single spaces"""
     if indented:
         if space + 1 != index:
@@ -1534,7 +1836,7 @@ def singly_space(
     else:
         line += char
         if space + 1 != index:
-            indented = True
+            indented = 1
     return line, index, indented
 
 
@@ -1561,14 +1863,15 @@ def outer_loop_adjust(
     return blocks + source_lines[end_pos:], indexes
 
 
-def setup_next_line(char: str, indentation: int) -> tuple[str, bool]:
+def setup_next_line(self, char: str = " ", indentation: int = None) -> None:
     """sets up the next line with indentation or not"""
     if char in ":;":
         ## assumes the current line is i.e. ; ... ; ... or if ... : ... ; ... ##
         ## if it's not this then we should get an empty line and this assumption ##
         ## will not take effect in modifying lines ##
-        return " " * indentation, True
-    return "", False
+        self.line, self.indented = " " * indentation, True
+        return
+    self.line, self.indented = "", False
 
 
 def unpack_lambda(source: str) -> list[str]:
@@ -1604,16 +1907,30 @@ def get_signature(line: str, args: bool = False) -> str | tuple[str, str]:
 
 
 def collect_lambda(
-    line: str, source_iter: Iterable, source: str, prev: tuple[int, int, str]
+    line: str,
+    source_iter: Iterable,
+    source: str,
+    prev: tuple[int, int, str],
+    index: int,
 ) -> tuple[str, str]:
     """Collects a lambda function into a single line"""
     depth, in_definition = 0, False
+    lines, line, index, fixed_lines = unpack(
+        line, source_iter, source, index=index, signature=True
+    )
+    char = source[index]
     for index, char in source_iter:
         if char == "'" or char == '"':
-            string_collected, prev, adjustments = string_collector_proxy(
-                index, char, prev, source_iter, line, source
+            string_collected, prev, adjustments, temp = string_collector_proxy(
+                index,
+                char,
+                prev,
+                source_iter,
+                line,
+                source,
             )
             line += string_collected
+            fixed_lines += temp
         elif (
             char in "#\n;"
             or (char == ":" and source[index + 1 : index + 2] != "=")
@@ -1628,7 +1945,7 @@ def collect_lambda(
                 if depth == -1:
                     break
             line += char
-    return char, line
+    return lines, line, fixed_lines, char
 
 
 def sign(
@@ -1658,18 +1975,14 @@ def sign(
 ######################################################
 
 
-def record_jumps(self: GeneratorType, number_of_indents: int) -> None:
+def record_jumps(self: object, number_of_indents: int) -> None:
     """Records the jump positions for the loops (for and while) to help with code adjustments"""
     ## has to be a list since we're assigning ##
-    self._internals["jump_positions"] += [[self._internals["lineno"], None]]
-    self._internals["jump_stack"] += [
-        (number_of_indents, len(self._internals["jump_positions"]) - 1)
-    ]
+    self.jump_positions += [[self.lineno, None]]
+    self.jump_stack += [(number_of_indents, len(self.jump_positions) - 1)]
 
 
-def custom_adjustment(
-    self: GeneratorType, line: str, number_of_indents: int = 0
-) -> list[str]:
+def custom_adjustment(self: object, line: str, number_of_indents: int = 0) -> list[str]:
     """
     It does the following to the source lines:
 
@@ -1683,14 +1996,14 @@ def custom_adjustment(
     indent = " " * number_of_indents
     ## decorator ##
     if temp_line.startswith("@"):
-        self._internals["decorator"] = True
+        self.decorator = True
         return [line]
     ## yield ##
     result = yield_adjust(temp_line, indent)
     if temp_line.startswith("yield from "):
-        lineno = self._internals["lineno"]
+        lineno = self.lineno
         ## lineno + 1 since this is not a loop ##
-        self._internals["jump_positions"] += [[lineno + 1, lineno + len(result)]]
+        self.jump_positions += [[lineno + 1, lineno + len(result)]]
     if result is not None:
         return result
     ## loops ##
@@ -1707,138 +2020,138 @@ def custom_adjustment(
         ## we have to remove the nonlocal keyword since there will be no bindings. ##
         ## The args are collected in __init__ for unintialized function generators; ##
         ## initialized generators already have them in their locals ##
-        self._internals["lineno"] -= 1
+        self.lineno -= 1
         return []
     return [line]
 
 
-def update_jump_positions(
-    self: GeneratorType, lines: list[str], reference_indent: int = -1
-) -> list[str]:
+def update_jump_positions(self: object, reference_indent: int = -1) -> list[str]:
     """
     Updates the end jump positions in self._internals["jump_positions"].
     It may also append the current lines with adjustments if it's a while
     loop that used a value yield in its condition
     """
-    if self._internals["jump_stack"]:
-        end_lineno = self._internals["lineno"]
+    if self.jump_stack:
+        end_lineno = self.lineno
         while (
-            self._internals["jump_stack"]
-            and reference_indent <= self._internals["jump_stack"][-1][0]
+            self.jump_stack and reference_indent <= self.jump_stack[-1][0]
         ):  # -1: top of stack, 0: indent
-            index = self._internals["jump_stack"].pop()[1]
-            self._internals["jump_positions"][index][1] = end_lineno
+            index = self.jump_stack.pop()[1]
+            self.jump_positions[index][1] = end_lineno
             ## add the adjustments
-            if (
-                self._internals["jump_stack_adjuster"]
-                ## check if they're the same lineno ##
-                and self._internals["jump_positions"][index][0]
-                == self._internals["jump_stack_adjuster"][-1][0]
-            ):
-                adjustments = self._internals["jump_stack_adjuster"].pop().pop()
-                ## add the adjustments ##
-                lines += adjustments
-                ## make sure with the adjustments that have loops ##
-                ## that the loops are recorded and the lineno is adjusted ##
-                count = 0
-                for self._internals["lineno"], line in enumerate(
-                    ## temporarily add an additional adjustment to make ##
-                    ## sure the loop positions are recorded properly ##
-                    adjustments + [""],
-                    start=self._internals["lineno"] + 1,
-                ):
-                    number_of_indents = get_indent(line)
-                    if is_loop(line[number_of_indents:]):
-                        count += 1
-                        record_jumps(self, number_of_indents)
-                    ## we can use -1 since all the loops should be complete ##
-                    elif (
-                        count
-                        and number_of_indents <= self._internals["jump_stack"][-1][0]
-                    ):
-                        index = self._internals["jump_stack"].pop()[1]
-                        self._internals["jump_positions"][index][1] = (
-                            self._internals["lineno"] + 1
-                        )
-                    self._internals["linetable"] += [self._internals["lineno"]]
-                ## since we temporarily increased the number of adjustments ##
-                self._internals["lineno"] -= 1
-                self._internals["linetable"].pop()
-    return lines
 
 
 def append_line(
-    self: GeneratorType,
-    index: int,
-    char: str,
-    source: str,
-    source_iter: Iterable,
+    self: object,
     running: bool,
-    line: str,
-    lines: list[str],
-    indentation: int,
-    indent_adjust: int,
-) -> tuple[int, str, int, list[str], str, bool, int]:
+) -> None:
     """skips comments, adds definitions, appends the line, updates the indentation, and updates the jump positions"""
     ## skip comments ##
-    if char == "#":
-        for index, char in source_iter:
-            if char == "\n":
+    if self.char == "#":
+        for self.index, self.char in self.source_iter:
+            if self.char == "\n":
                 break
     ## make sure to include it ##
-    if char == ":":
-        indentation = get_indent(line) + 4  # in case of ';'
-        line += char
-    if line and not line.isspace():  ## empty lines are possible ##
-        reference_indent = get_indent(line)
+    if self.char == ":":
+        self.indentation = get_indent(self.line) + 4  # in case of ';'
+        self.line += self.char
+    if self.line and not self.line.isspace():  ## empty lines are possible ##
+        reference_indent = get_indent(self.line)
         ## make sure the line is corrected if it currently assumes indentation when it shouldn't ##
         if (
-            indent_adjust
-            and reference_indent - (char == ":") * 4 >= indentation - indent_adjust
+            self.indent_adjust
+            and reference_indent - (self.char == ":") * 4
+            >= self.indentation - self.indent_adjust
         ):
-            line = " " * indent_adjust + line
+            self.line = " " * self.indent_adjust + self.line
         else:
-            indent_adjust = 0
-        lines = update_jump_positions(self, lines, reference_indent)
+            self.indent_adjust = 0
+        update_jump_positions(self, reference_indent)
         ## skip the definitions ##
-        temp_line = line[reference_indent:]
+        temp_line = self.line[reference_indent:]
         if is_definition(temp_line):
-            index, char, self._internals["lineno"], lines = collect_definition(
-                index - len(line) + 1,
-                lines,
-                self._internals["lineno"],
-                source,
-                source_iter,
+            collect_definition(
+                self,
+                self.index - len(self.line) + 1,
                 reference_indent,
-                self._internals["decorator"],
             )
-            self._internals["decorator"] = False
+            if self.decorator:
+                signature = get_signature(temp_line)
+                self.lines += [
+                    " " * reference_indent
+                    + signature
+                    + " = locals()['.internals']['.decorator'](%s)" % signature
+                ]
+                self.decorator = False
         else:
             ## update the lineno before so the loops positions are lineno based ##
-            self._internals["lineno"] += 1
-            lines += custom_adjustment(self, line, reference_indent)
-        line, indented = setup_next_line(char, indentation)
+            self.lineno += 1
+            temp_line = custom_adjustment(self, self.line, reference_indent)
+            ## for multiple except catches ##
+            if self.catch:
+                ## end of except catches ##
+                if reference_indent < self.catch[1]:
+                    self.lines += [" " * (4 * self.catch[0] + self.catch[1]) + "else:"]
+                    self.lines += indent_lines(
+                        [
+                            "locals()['.internals']['.continue_error'] = False",
+                            "raise locals()['.internals']['.error']",
+                        ],
+                        self.catch[1] + (4 * (self.catch[0] + 1)),
+                    )
+                    self.lines += indent_lines(["finally:", "    pass"], self.catch[1])
+                    self.catch = []
+                elif reference_indent == self.catch[1]:
+                    temp = temp_line[0].lstrip()
+                    flag = temp.startswith("except:") or temp.startswith("except ")
+                    if flag:
+                        self.lines += [
+                            " " * (4 * self.catch[0] + self.catch[1]) + "else:"
+                        ]
+                        temp_line = except_catch_adjust(temp_line[0], [])
+                        temp_line = indent_lines(temp_line, 4 * self.catch[0])
+                        self.catch[0] += 1
+                    else:
+                        self.lines += [
+                            " " * (4 * self.catch[0] + self.catch[1]) + "else:"
+                        ]
+                        self.lines += indent_lines(
+                            [
+                                "locals()['.internals']['.continue_error'] = False",
+                                "raise locals()['.internals']['.error']",
+                            ],
+                            self.catch[1] + (4 * (self.catch[0] + 1)),
+                        )
+                        if not temp.startswith("finally:") or temp.startswith(
+                            "finally "
+                        ):
+                            self.lines += indent_lines(
+                                ["finally:", "    pass"], self.catch[1]
+                            )
+                        self.catch = []
+                else:
+                    temp_line = indent_lines(temp_line, 4 * self.catch[0])
+            self.lines += temp_line
+        setup_next_line(self, self.char, self.indentation)
     else:
-        reference_indent = indentation
-        line, indented = "", False
+        reference_indent = self.indentation
+        setup_next_line(self)
     ## make a linetable if using a running generator ##
     ## for the linetable e.g. for lineno_adjust e.g. compound statements ##
-    if running and char == "\n":
-        self._internals["linetable"] += [self._internals["lineno"]]
+    if running and self.char == "\n":
+        self.linetable += [self.lineno]
     # if indent_adjust:
     #     line += " " * indent_adjust
-    ## start a new line ##
-    return index, char, lines, line, indented, indentation, indent_adjust
+    ## 'space' is important (otherwise we get more indents than necessary) ##
+    self.space = self.index
 
 
 def block_adjust(
-    self: GeneratorType,
+    self: object,
     current_lines: list[str],
     new_lines: list[str],
     final_line: str,
-    source: str,
-    source_iter: Iterable,
-) -> list[str]:
+) -> None:
     """
     Checks if lines that were adjusted because of value yields
     are in a block statement and therefore needs adjusting
@@ -1850,20 +2163,18 @@ def block_adjust(
     """
     ## make sure any loops are recorded (necessary for 'yield from ...' adjustment) ##
     ## and the lineno is updated ##
-    is_loop = False
-    for self._internals["lineno"], line in enumerate(
-        new_lines, start=self._internals["lineno"] + 1
-    ):
+    loop = False
+    for self.lineno, line in enumerate(new_lines, start=self.lineno + 1):
         number_of_indents = get_indent(line)
         if is_loop(line[number_of_indents:]):
-            record_jumps(self, self._internals["lineno"], number_of_indents)
-            is_loop = number_of_indents
+            record_jumps(self, number_of_indents)
+            loop = number_of_indents
             continue
-        if number_of_indents <= is_loop:
-            self._internals["jump_positions"][-1][1] = self._internals["lineno"]
-            is_loop = False
-    if is_loop:
-        self._internals["jump_positions"][-1][1] = self._internals["lineno"]
+        if loop and number_of_indents <= loop:
+            self.jump_positions[-1][1] = self.lineno
+            loop = False
+    if loop:
+        self.jump_positions[-1][1] = self.lineno
     ## check for adjustments in the final line ##
     number_of_indents = get_indent(final_line)
     temp_line = final_line[number_of_indents:]
@@ -1875,93 +2186,112 @@ def block_adjust(
             temp_line = "locals()['.internals']['partial'](%s, %s)" % signature
         else:
             temp_line = signature[0]
-        if self._internals["decorator"]:
+        if self.decorator:
             temp_line = "locals()['.internals']['.decorator'](%s)" % temp_line
         else:
-            self._internals["decorator"] = True
+            self.decorator = True
         final_line = (
             " " * number_of_indents
             + "locals()['.internals']['.decorator'] = "
             + temp_line
         )
     elif is_definition(temp_line):
-        index, char, self._internals["lineno"], lines = collect_definition(
-            index - len(line) + 1,
-            lines,
-            self._internals["lineno"],
-            source,
-            source_iter,
+        collect_definition(
+            self,
+            self.index - len(self.line) + 1,
             number_of_indents,
-            self._internals["decorator"],
         )
-        self._internals["decorator"] = False
-    elif is_loop(temp_line):
+        if self.decorator:
+            lines += [
+                get_signature(temp_line) + " = locals()['.internals']['.decorator']"
+            ]
+            self.decorator = False
+    elif temp_line.startswith("while "):
         ## the end of the loop needs to be appended with the new_lines ##
         ## locals()[".args"] += next(...)
         ## while locals()[".args"].pop():
         ##     ...
         ##     locals()[".args"] += next(...)
-        self._internals["jump_stack_adjuster"] += [
-            [self._internals["lineno"]] + indent_lines(new_lines, number_of_indents + 4)
+        self.stack_adjuster += [
+            [number_of_indents] + indent_lines(new_lines, number_of_indents + 4)
         ]
     ## needs to indent itself and all other lines until the end of the block ##
     ## Note: only elif since if statements should be fine ##
     elif check("elif"):
         ## +4 to encapsulate in an else statement +2 to make it an 'if' statement ##
         final_line = " " * (number_of_indents + 4) + final_line[number_of_indents + 2 :]
-        return (
+        self.lines = (
             current_lines
             + [" " * number_of_indents + "else:"]
             + indent_lines(new_lines, number_of_indents + 4)
             + [final_line]
         )
+        return
     elif check("except"):
-        ## this is the problem ##
-        # if current_lines[-2] == ' try:':
-        #     current_lines[-2] = ' ' * 8 + 'try:'
-        #     final_line = final_line[8:]
-        ## except_adjust automatically does the indentation ##
-        return except_adjust(current_lines, new_lines, final_line)
-    self._internals["lineno"] += 1
-    return current_lines + indent_lines(new_lines, number_of_indents) + [final_line]
+        ## if it's already excepting ##
+        if self.catch:
+            self.lines += [" " * (4 * self.catch[0] + self.catch[1]) + "else:"]
+            self.lines += indent_lines(
+                except_catch_adjust(final_line, new_lines), 4 * self.catch[0]
+            )
+            self.catch[0] += 1
+        else:
+            ## except_adjust automatically does the indentation ##
+            self.lines, indent = except_adjust(current_lines, new_lines, final_line)
+            self.catch = [1, indent]
+        return
+    self.lineno += 1
+    self.lines = (
+        current_lines + indent_lines(new_lines, number_of_indents) + [final_line]
+    )
 
 
-def string_collector_adjust(
-    self: GeneratorType,
-    index: int,
-    char: str,
-    prev: tuple[int, int, str],
-    source_iter: Iterable,
-    line: str,
-    source: str,
-    lines: list[str],
-) -> tuple[str, int, list[str]]:
+def string_collector_adjust(self: object) -> None:
     """Adjust the string collector in case of any value yields in the f-strings"""
-    string_collected, prev, adjustments = string_collector_proxy(
-        index, char, prev, source_iter, line, source
+    string_collected, self.prev, adjustments, fixed_lines = string_collector_proxy(
+        self.index, self.char, self.prev, self.source_iter, self.line, self.source
     )
     if adjustments:
-        ## since we have adjustments we need to adjust the chars before it ##
-        adjustments_start, line_start, index = unpack(line, source=source, index=index)
-        line_start = " " * get_indent(line) + line_start.lstrip()
-        adjustments_end, line_end, index = unpack(
-            source_iter=source_iter, source=source, index=index
+        ## since we have adjustments we need to adjust the chars after it ##
+        # adjustments_start, line_start, self.index, fixed_lines = unpack(
+        #     self.line, source=self.source, index=self.index, fixed_lines=fixed_lines
+        # )
+        # print(adjustments_start, line_start)
+        # line_start = " " * get_indent(self.line)# + line_start.lstrip()
+        adjustments_end, line_end, self.index, fixed_lines = unpack(
+            source_iter=self.source_iter,
+            source=self.source,
+            index=self.index,
+            fixed_lines=fixed_lines,
         )
         final_adjustments, final_line = (
-            adjustments_start + adjustments + adjustments_end,
-            line_start + string_collected + line_end,
+            adjustments + adjustments_end,
+            self.line + string_collected + line_end,
         )
-        return (
-            index,
-            prev,
-            block_adjust(
-                self, lines, final_adjustments, final_line, source, source_iter
-            ),
-        )
-    return line + string_collected, prev, lines
+        add_fixed_lines(self, fixed_lines)
+        block_adjust(self, self.lines, final_adjustments, final_line)
+        self.depth, self.ID = 0, ""
+        self.indentation = get_indent(self.lines[-1])
+        setup_next_line(self, self.source[self.index], self.indentation)
+        self.space = self.index
+        return
+    add_fixed_lines(self, fixed_lines)
+    self.line += string_collected
 
 
-def clean_source_lines(self: GeneratorType, running: bool = False) -> list[str]:
+def add_fixed_lines(self: object, fixed_lines: int) -> None:
+    if fixed_lines:
+        self.linetable += [self.lineno] * fixed_lines
+
+
+def update_stack(self, reference_indent: int = 0) -> None:
+    while self.stack_adjuster and reference_indent <= self.stack_adjuster[-1][0]:
+        self.lines += self.stack_adjuster.pop()[1:]
+        self.lineno += 2
+        self.linetable += [self.lineno]
+
+
+def clean_source_lines(gen: object, running: bool = False) -> None:
     """
     source: str
 
@@ -1978,181 +2308,196 @@ def clean_source_lines(self: GeneratorType, running: bool = False) -> list[str]:
     jump_stack: jump_positions currently being recorded (gets popped into jump_positions once
                     the reference indent has been met or lower for the next line that does so)
                     it records a tuple of (reference_indent,jump_position_index)
+    stack_adjuster: adjusts the lines with new lines from unpacking a while loop condition
+    fixed_lineno: the lineno of the current line fixed at the first line of unpacking
     """
+    ## create a mutable instance ##
+    self = type("", tuple(), {})()
     ## for loop adjustments ##
     (
-        self._internals["jump_positions"],
-        self._internals["jump_stack"],
-        self._internals["jump_stack_adjuster"],
-        self._internals["decorator"],
-        self._internals["lineno"],
+        self.catch,
+        self.linetable,
+        self.jump_positions,
+        self.jump_stack,
+        self.stack_adjuster,
+        self.lines,
+        self.indented,
+        self.decorator,
+        self.lineno,
+        self.fixed_lines,
+        self.depth,
+        self.space,
+        self.indent_adjust,
+        self.indentation,
+        self.fixed_lineno,
+        self.ID,
+        self.line,
+        self.prev,
     ) = (
         [],
         [],
         [],
-        False,
-        0,
-    )
-    ## setup source as an iterator and making sure the first indentation's correct ##
-    source = skip_source_definition(self._internals["source"])
-    ## we need to make sure the source is saved for skipping for line continuations ##
-    source = source[get_indent(source) :]
-    source_iter = enumerate(source)
-    ID, depth, line, lines, indented, space, indentation, prev, indent_adjust = (
-        "",
-        0,
-        " " * 4,
+        [],
+        [],
         [],
         False,
+        False,
+        0,
+        0,
+        0,
+        0,
         0,
         4,
+        None,
+        "",
+        " " * 4,
         (0, 0, ""),
-        0,
     )
+
+    ## setup source as an iterator and making sure the first indentation's correct ##
+    ## we need to make sure the source is saved for skipping for line continuations ##
+    self.source = skip_source_definition(gen._internals["source"])
+    self.source = self.source[get_indent(self.source) :]
+    self.source_iter = enumerate(self.source)
     ## enumerate since I want the loop to use an iterator but the
     ## index is needed to retain it for when it's used on get_indent
-    for index, char in source_iter:
+    for self.index, self.char in self.source_iter:
         ## collect strings ##
-        if char == "'" or char == '"':
-            line, prev, lines = string_collector_adjust(
-                self, index, char, prev, source_iter, line, source, lines
-            )
-            if isinstance(line, int):
-                depth, ID = 0, ""
-                indentation = get_indent(lines[-1])
-                line, indented = setup_next_line(source[line], indentation)
-                space = index
+        if self.char == "'" or self.char == '"':
+            string_collector_adjust(self)
         ## makes the line singly spaced while retaining the indentation ##
-        elif char == " ":
-            line, space, indented = singly_space(index, char, line, space, indented)
+        elif self.char == " ":
+            self.line, self.space, self.indented = singly_space(
+                self.index, self.char, self.line, self.space, self.indented
+            )
+            if self.indented == 1:
+                update_stack(self, get_indent(self.line))
+                self.indentation = 2
         ## join everything after the line continuation until the next \n or ; ##
-        elif char == "\\":
-            skip_line_continuation(source_iter, source, index)
+        elif self.char == "\\":
+            skip_line_continuation(self.source_iter, self.source, self.index)
+            add_fixed_lines(self, 1)
             ## in case of a line continuation without a space before (whitespace after is removed) ##
             ## Note: i.e. 'func        ()' is valid in python ##
-            if space + 1 != index:
-                line += " "
-                space = index
+            if self.space + 1 != self.index:
+                self.line += " "
+                self.space = self.index
         ## create new line ##
-        ## should be able to go depth == 0 ... like in unpack ##
-        ## depth == 0 in case of brackets splitting across lines ##
-        # depth == 0 and
-        elif char in "#\n;" or (char == ":" and source[index + 1 : index + 2] != "="):
-            ## 'space' is important (otherwise we get more indents than necessary) ##
-            space, char, lines, line, indented, indentation, indent_adjust = (
-                append_line(
-                    self,
-                    index,
-                    char,
-                    source,
-                    source_iter,
-                    running,
-                    line,
-                    lines,
-                    indentation,
-                    indent_adjust,
-                )
-            )
-            depth, ID = 0, ""
+        elif self.char in "#\n;" or (
+            self.char == ":" and self.source[self.index + 1 : self.index + 2] != "="
+        ):
+            self.ID = ""
+            if (
+                running
+                and self.char == "\n"
+                and (self.depth or self.fixed_lineno is not None)
+            ):
+                ## adjusts the linetable for closing opened brackets ##
+                if self.fixed_lineno is None:
+                    self.lineno += 1
+                    self.fixed_lineno = self.lineno
+                    self.lines += [""]
+                self.linetable += [self.fixed_lineno]
+                ## append the current line ##
+                self.lines[-1] += self.line
+                self.line = ""
+                if self.depth == 0:
+                    self.fixed_lineno = None
+                    ## append the current line ##
+                    setup_next_line(self, self.char, self.indentation)
+            else:
+                self.fixed_lineno = None
+                append_line(self, running)
+                self.depth = 0
         else:
-
-            ### might move this section into a function ###
-
-            line += char
+            self.line += self.char
             ## detect value yields [yield] and {yield} is not possible only (yield) ##
-            depth = update_depth(depth, char)
-            if char == "=":  ## '... = yield ...' and '... = yield from ...'
-                depth += 1
-            if depth and char.isalnum():
-                ID, line, lines, indented, index, char, space = source_update_ID(
+            self.depth = update_depth(self.depth, self.char)
+            ## '... = yield ...' and '... = yield from ...'
+            assigned = self.char == "="
+            if (self.depth or assigned) and self.char.isalnum():
+                source_update_ID(
                     self,
-                    source,
-                    source_iter,
-                    prev,
-                    space,
-                    index,
-                    char,
-                    ## : index + 2 in case of IndexError ##
-                    source[index + 1 : index + 2],
-                    ID,
-                    line,
-                    lines,
-                    indented,
+                    self.source[
+                        self.index + 1 : self.index + 2
+                    ],  ## : index + 2 in case of IndexError ##
                     running,
                 )
             else:
-                ID = ""
+                self.ID = ""
     ## in case you get a for loop at the end and you haven't got the end jump_position ##
     ## then you just pop them all off as being the same end_lineno ##
     ## note: we don't need a reference indent since the line is over e.g. ##
     ## the jump_stack will be popped if it exists ##
-    lines = update_jump_positions(self, lines)
+    update_jump_positions(self)
+    update_stack(self)
     ## are no longer needed ##
-    del (
-        self._internals["jump_stack"],
-        self._internals["jump_stack_adjuster"],
-        self._internals["decorator"],
+    gen._internals.update(
+        {
+            "source_lines": self.lines,
+            "jump_positions": self.jump_positions,
+            "linetable": self.linetable,
+        }
     )
-    return lines
 
 
 def source_update_ID(
     self: GeneratorType,
-    source: str,
-    source_iter: Iterable,
-    prev: tuple[int, int, str],
-    space: int,
-    index: int,
-    char: str,
     next_char: str,
-    ID: str,
-    line: str,
-    lines: list[str],
-    indented: bool,
     running: bool,
-) -> tuple[str, str, list[str], bool, int, str, int]:
+) -> None:
     """Handles ID in clean_source_lines to collect lambdas, value yields, and ternary expressions"""
     ## in case of ... ... (otherwise you keep appending the ID) ##
-    if space + 1 == index:
-        ID = ""
-    ID += char
-    if ID == "lambda" and next_char in " :\\":
-        char, lines = collect_lambda(line, source_iter, source, prev)
-        indentation = get_indent(line)
-        line, indented = setup_next_line(char, indentation)
-        self._internals["lineno"] += 1
-        ID = ""
-    elif ID == "yield" and next_char in " )]}\n;\\":
-        new_lines, final_line, index = unpack(
-            line, source_iter, source=source, index=index
+    if self.space + 1 == self.index:
+        self.ID = ""
+    self.ID += self.char
+    if self.ID == "lambda" and next_char in " :\\":
+        ([], "lambda x: x", 0, "x")
+        temp = collect_lambda(self.line, self.source_iter, self.source, self.prev)
+        self.lines += temp[0]
+        self.line += temp[1]
+        self.fixed_lines += temp[2]
+        self.char = temp[3]
+        self.indentation = get_indent(self.line)
+        setup_next_line(self, self.char, self.indentation)
+        self.lineno += 1
+        self.ID = ""
+    elif self.ID == "yield" and next_char in " )]}\n;\\":
+        # print(self.line," --- STAGE 1")
+        new_lines, final_line, self.index, fixed_lines = unpack(
+            self.line, self.source_iter, self.source, index=self.index
         )
-        final_line = " " * get_indent(line) + final_line.lstrip()
-        if line[get_indent(line) :].startswith("elif "):
-            indent_adjust = 4
-        length_before = len(lines)
-        lines = block_adjust(self, lines, new_lines, final_line, source, source_iter)
+
+        # print(final_line," --- STAGE 2")
+        # from sys import exit
+        # exit()
+        # print(self.source[self.index])
+        add_fixed_lines(self, fixed_lines)
+        final_line = " " * get_indent(self.line) + final_line.lstrip()
+        if self.line[get_indent(self.line) :].startswith("elif "):
+            self.indent_adjust = 4
+        length_before = len(self.lines)
+        block_adjust(self, self.lines, new_lines, final_line)
         if running:
-            self._internals["linetable"] += [self._internals["lineno"]] * (
-                len(lines) - length_before
-            )
+            self.linetable += [self.lineno] * (len(self.lines) - length_before)
 
         if is_definition(final_line[get_indent(final_line) :]):
-            line, indented = "", False
+            setup_next_line(self)
         else:
-            indentation = get_indent(lines[-1]) + indent_adjust
-            line, indented = setup_next_line(source[index], indentation)
-        if indent_adjust:
-            line = " " * indentation
-            space = index
-        ID = ""
+            self.indentation = get_indent(self.lines[-1]) + self.indent_adjust
+            setup_next_line(self, self.source[self.index], self.indentation)
+        if self.indent_adjust:
+            self.line = " " * self.indentation
+            self.space = self.index
+        self.ID = ""
+        # print(self.lines[-1]," --- STAGE 3")
     ## ternary statement ##
-    elif ID == "if" and next_char in " \\" and line[:-2].lstrip():
-        new_lines, final_line, _ = unpack(line, source_iter, source=source, index=index)
-        lines = self.block_adjust(
-            self, lines, new_lines, final_line, source, source_iter
+    elif self.ID == "if" and next_char in " \\" and self.line[:-2].lstrip():
+        new_lines, final_line, _, fixed_lines = unpack(
+            self.line, self.source_iter, source=self.source, index=self.index
         )
-        ## setup for a new line ##
-    return ID, line, lines, indented, index, char, space
+        add_fixed_lines(self, fixed_lines)
+        self.block_adjust(self, new_lines, final_line)
 
 
 def clean_lambda(self: GeneratorType, FUNC: FunctionType) -> None:
@@ -2170,7 +2515,7 @@ def clean_lambda(self: GeneratorType, FUNC: FunctionType) -> None:
         genexpr_adjust(self, source)
     ## should only have a single value yield at depth == 1 ##
     elif type == "<Generator>":
-        lines, final_line, _ = unpack(source)
+        lines, final_line, _, _ = unpack(source)
         self._internals["source_lines"] = lines + [final_line]
         self._internals["lineno"] = 1
     else:
@@ -2239,3 +2584,49 @@ def check_expression(source: str) -> str:
     if temp and not temp.isspace():
         return ""
     return expression
+
+
+### when is it def
+### when does indentation get reduced
+
+
+def extract_function(source_code: str) -> GeneratorType:
+    """Extracts each function and its offset from the source code"""
+    ID, indent, prev, indented, offsets, reference_indent = (
+        "",
+        0,
+        (0, 0, ""),
+        False,
+        [],
+        [],
+    )
+    source_iter = enumerate(source_code)
+    for index, char in source_iter:
+        if not indented:
+            if char == " ":
+                indent += 1
+            else:
+                while reference_indent and indent <= reference_indent[-1]:
+                    yield offsets.pop(), index + reference_indent.pop()
+                indented = True
+        ## skip all strings (we only want the offsets) ##
+        if char == "'" or char == '"':
+            _, prev, _ = string_collector_proxy(index, char, prev, source_iter)
+        elif char == "\\":
+            skip_line_continuation(source_iter, source_code, index)
+        elif char == "\n":
+            ID, indent, indented = "", 0, False
+            continue
+        if char.isalnum():
+            ID += char
+        else:
+            if ID == "def" and char == " ":
+                temp = index - 4 - indent
+                if temp == -1:
+                    temp = 0
+                offsets += [temp]
+                reference_indent += [indent]
+            ID = ""
+
+    while offsets:
+        yield offsets.pop(), None

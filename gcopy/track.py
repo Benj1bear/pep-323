@@ -111,7 +111,7 @@ def track_adjust(f_locals: dict) -> bool:
 
 
 def track_shift(FUNC: FunctionType, internals: dict) -> None:
-    ## adjust the indentation based trackers to a minimum of 4 ##
+    """adjust the indentation based trackers to a minimum of 4 spaces"""
     indent = get_indent(getsourcelines(getcode(FUNC))[0][0])
     for key in tuple(internals.keys()):
         if isinstance(key, str) and key[0] == "." and key[1:].isdigit():
@@ -126,6 +126,8 @@ def track_shift(FUNC: FunctionType, internals: dict) -> None:
 
 
 class track(Wrapper):
+    """Wrapper class to track iterators"""
+
     _expected = ["__iter__", "__next__"]
 
     def __iter__(self) -> Iterator:
@@ -143,6 +145,8 @@ class track(Wrapper):
 
 
 class atrack(Wrapper):
+    """Wrapper class to track async iterators"""
+
     _expected = ["__aiter__", "__anext__"]
 
     def __aiter__(self) -> Iterator:
@@ -157,7 +161,7 @@ class atrack(Wrapper):
 
 
 def wrapper_proxy(FUNC: FunctionType) -> FunctionType:
-    """Proxy for type checking"""
+    """Proxy for type checking when using the tracked iterators"""
 
     def wrapper(obj, class_or_tuple: type | tuple) -> bool:
         if type(class_or_tuple) in (track, atrack):
@@ -205,16 +209,3 @@ def unpatch_iterators(scope: dict = None) -> None:
         del scope[name]
     for FUNC in ("isinstance", "issubclass"):
         del scope[FUNC]
-
-
-def iter_init(obj: Iterable | Iterator) -> Iterable:
-    if obj.__name__ in ("memoryview",):
-        return iter(obj(b"abcedfg"))
-    elif obj.__name__ in ("enumerate", "reversed"):
-        return iter(obj([]))
-    elif obj.__name__ == "range":
-        return iter(obj(2))
-    elif obj.__name__ in ("zip", "filter", "map"):
-        return iter(obj([], []))
-    else:
-        return iter(obj())

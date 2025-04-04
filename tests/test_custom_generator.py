@@ -17,16 +17,16 @@ class pickler(Pickler):
     _attrs = ("a", "b", "c")
 
 
-def setup() -> Generator:
+def setup() -> object:
     """setup used for jump_positions"""
-    gen = Generator()
-    gen._internals["jump_positions"], gen._internals["jump_stack"] = [
+    self = type("", tuple(), {})()
+    self.jump_positions, self.jump_stack = [
         [1, None],
         [1, None],
     ], [(0, 0), (0, 1)]
-    gen._internals["jump_stack_adjuster"], gen._internals["linetable"] = [], []
-    gen._internals["lineno"] = 1
-    return gen
+    self.stack_adjuster, self.linetable = [], []
+    self.lineno = 1
+    return self
 
 
 def simple_generator() -> Generator:
@@ -114,9 +114,7 @@ def test_Pickler(pickler_test: Pickler = None) -> None:
     if pickler_test is None:
         pickler_test = pickler()
         pickler_test.__setstate__(dict(zip(("a", "b", "c"), range(3))))
-    if isinstance(pickler_test, BaseGenerator):
-        pass
-    else:
+    if not isinstance(pickler_test, BaseGenerator):
         assert copier(pickler_test, lambda x: x) is not copier(
             pickler_test, lambda x: x
         )
@@ -181,13 +179,13 @@ def test_generator_pickle() -> None:
 
 
 def test_generator_custom_adjustment() -> None:
-    gen = Generator()
-    gen._internals["lineno"] = 0
-    test = partial(custom_adjustment, gen)
+    self = type("", tuple(), {})()
+    self.lineno = 0
+    test = partial(custom_adjustment, self)
     ## yield ##
     assert test("yield ... ") == ["return ... "]
     ## yield from ##
-    gen._internals["jump_positions"] = []
+    self.jump_positions = []
     assert test("yield from ... ") == [
         "locals()['.internals']['.0']=locals()['.internals']['.yieldfrom']=iter(... )",
         "for locals()['.internals']['.i'] in locals()['.internals']['.yieldfrom']:",
@@ -196,17 +194,17 @@ def test_generator_custom_adjustment() -> None:
         "        return locals()['.internals']['.yieldfrom'].send(locals()['.internals']['.send'])",
     ]
     ## check the jump positions ##
-    assert gen._internals["jump_positions"] == [[1, 5]]
+    assert self.jump_positions == [[1, 5]]
     ## for ##
-    gen._internals["jump_positions"], gen._internals["jump_stack"] = [], []
+    self.jump_positions, self.jump_stack = [], []
     assert test("for ") == ["for "]
-    assert gen._internals["jump_positions"], gen._internals["jump_stack"] == (
+    assert self.jump_positions, self.jump_stack == (
         [[0, None]],
         [(0, 0)],
     )
     ## while ##
     assert test("while ") == ["while "]
-    assert gen._internals["jump_positions"], gen._internals["jump_stack"] == (
+    assert self.jump_positions, self.jump_stack == (
         [[0, None], [0, None]],
         [(0, 0), (0, 1)],
     )
@@ -214,58 +212,113 @@ def test_generator_custom_adjustment() -> None:
     assert test("return ... ") == ["return EOF('... ')"]
     ## nonlocal ##
     assert test("nonlocal ... ") == []
+    ## decorator ##
+    assert hasattr(self, "decorator") == False
+    assert test("@test") == ["@test"]
+    assert self.decorator
 
 
 def test_generator_update_jump_positions() -> None:
 
     #### Note: jump_positions are by lineno not by index ####
 
-    gen = setup()
-    gen._internals["lineno"] += 1  ## it won't occur on the same lineno ##
+    self = setup()
+    self.lineno += 1  ## it won't occur on the same lineno ##
     ## only positions ##
     # with reference indent #
-    assert update_jump_positions(gen, [], 4) == []
-    assert gen._internals["jump_positions"] == [[1, None], [1, None]]
-    assert gen._internals["jump_stack"] == [(0, 0), (0, 1)]
+    self.lines = []
+    update_jump_positions(self, 4)
+    assert self.lines == []
+    assert self.jump_positions == [[1, None], [1, None]]
+    assert self.jump_stack == [(0, 0), (0, 1)]
     # without reference indent #
-    assert update_jump_positions(gen, []) == []
-    assert gen._internals["jump_positions"] == [[1, 2], [1, 2]]
-    assert gen._internals["jump_stack"] == []
+    self.lines = []
+    update_jump_positions(self)
+    assert self.lines == []
+    assert self.jump_positions == [[1, 2], [1, 2]]
+    assert self.jump_stack == []
     ## with stack adjuster ##
-    gen = setup()
-    gen._internals["lineno"] += 1
-    new_lines = ["    pass", "    for i in range(3)", "        pass"]
-    gen._internals["jump_stack_adjuster"] = [[1, new_lines]]
-    ## check: lines, lineno, linetable, jump_positions, jump_stack_adjuster ##
-    assert update_jump_positions(gen, []) == new_lines
-    assert gen._internals["jump_stack_adjuster"] == []
-    ## since we're on lineno == 2 the new_lines will be 3, 4, 5 ##
-    assert gen._internals["linetable"] == [3, 4, 5]
-    assert gen._internals["lineno"] == 5
-    assert gen._internals["jump_positions"] == [[1, 2], [1, 2], [4, 7]]
+    # self = setup()
+    # self.lineno += 1
+    # new_lines = ["    pass", "    for i in range(3)", "        pass"]
+    # self.stack_adjuster = [[1, new_lines]]
+    # ## check: lines, lineno, linetable, jump_positions, stack_adjuster ##
+    # self.lines = []
+    # update_jump_positions(self)
+    # assert self.lines == new_lines
+    # assert self.stack_adjuster == []
+    # ## since we're on lineno == 2 the new_lines will be 3, 4, 5 ##
+    # assert self.linetable == [3, 4, 5]
+    # assert self.lineno == 5
+    # assert self.jump_positions == [[1, 2], [1, 2], [4, 7]]
 
 
 def test_generator_append_line() -> None:
+    """
+    required inputs;
+        self,
+        index: int,
+        char: str,
+        source: str,
+        source_iter: Iterable,
+        running: bool,
+        line: str,
+        lines: list[str],
+        indentation: int,
+        indent_adjust: int,
 
-    def test(start: int, index: int, indentation: int = 0) -> None:
-        source = "    print('hi')\n    print('hi');\nprint('hi')\n    def hi():\n        print('hi')\n print() ## comment\n    if True:"
-        return append_line(
-            gen,
-            index,
-            source[index],
-            source,
-            enumerate(source[index + 1 :], start=index + 1),
-            True,
-            source[start:index],
-            [],
-            indentation,
-            0,
+        reqruied outputs:
+        index, char, lines, line, indented, indentation, indent_adjust
+    """
+
+    def get_returns(self) -> tuple[int, str, list[str], str, bool, int, int]:
+        return (
+            self.index,
+            self.char,
+            self.lines,
+            self.line,
+            self.indented,
+            self.indentation,
+            self.indent_adjust,
         )
+
+    def manual_test(self, *args) -> tuple:
+        (
+            self.index,
+            self.char,
+            self.source,
+            self.source_iter,
+            self.line,
+            self.lines,
+            self.indentation,
+            self.indent_adjust,
+        ) = args
+        append_line(self, True)
+        return get_returns(self)
+
+    def test(self, start: int, index: int, indentation: int = 0) -> tuple:
+        source = "    print('hi')\n    print('hi');\nprint('hi')\n    def hi():\n        print('hi')\n print() ## comment\n    if True:"
+
+        self.index = index
+        self.char = source[index]
+        self.source = source
+        self.source_iter = enumerate(source[index + 1 :], start=index + 1)
+        self.line = source[start:index]
+        self.lines = []
+        self.indentation = indentation
+        self.indent_adjust = 0
+
+        append_line(self, True)
+
+        return get_returns(self)
 
     ## empty line ##
 
-    gen = setup()
-    assert append_line(gen, 0, "", "", "", "", "", [], 0, 0) == (
+    self = setup()
+    self.indented = False
+    self.catch = []
+
+    assert manual_test(self, 0, "", "", "", "", [], 0, 0) == (
         0,
         "",
         [],
@@ -274,7 +327,7 @@ def test_generator_append_line() -> None:
         0,
         0,
     )
-    assert append_line(gen, 0, "", "", "", "", "         ", [], 0, 0) == (
+    assert manual_test(self, 0, "", "", "", "         ", [], 0, 0) == (
         0,
         "",
         [],
@@ -285,17 +338,17 @@ def test_generator_append_line() -> None:
     )
 
     ## normal line ##
-    assert test(0, 15) == (15, "\n", ["    print('hi')"], "", False, 0, 0)
+    assert test(self, 0, 15) == (15, "\n", ["    print('hi')"], "", False, 0, 0)
     ## semi-colon ##
-    assert test(16, 31) == (31, ";", ["    print('hi')"], "", True, 0, 0)
+    assert test(self, 16, 31) == (31, ";", ["    print('hi')"], "", True, 0, 0)
     ## comments ##
-    assert test(79, 88) == (98, "\n", [" print() "], "", False, 0, 0)
+    assert test(self, 79, 88) == (98, "\n", [" print() "], "", False, 0, 0)
     ## statements/colon ##
-    assert test(99, 110) == (110, ":", ["    if True:"], "        ", True, 8, 0)
+    assert test(self, 99, 110) == (110, ":", ["    if True:"], "        ", True, 8, 0)
     ## skip definitions ##
-    gen._internals["lineno"] = 1
-    gen._internals["decorator"] = False
-    assert test(45, 57) == (
+    self.lineno = 1
+    self.decorator = False
+    assert test(self, 45, 57) == (
         78,
         "\n",
         ["    def hi():", "        print('hi')"],
@@ -304,45 +357,87 @@ def test_generator_append_line() -> None:
         8,
         0,
     )
-    assert gen._internals["lineno"] == 3
+    assert self.lineno == 3
     ## decorators ##
-    gen._internals["lineno"] = 1
-    gen._internals["decorator"] = True
+    ## using the previous example definition ##
+    self.lineno = 1
+    self.decorator = True
+    assert test(self, 45, 57) == (
+        78,
+        "\n",
+        [
+            "    def hi():",
+            "        print('hi')",
+            "    hi = locals()['.internals']['.decorator'](hi)",
+        ],
+        "",
+        False,
+        8,
+        0,
+    )
 
 
 def test_generator_block_adjust() -> None:
-    gen = Generator()
-    gen._internals["lineno"], gen._internals["jump_stack_adjuster"] = 0, []
+    """
+    # self,
+    # current_lines: list[str],
+    # new_lines: list[str],
+    # final_line: str,
+    # source: str,
+    # source_iter: Iterable,
+    """
+
+    gen = type("", tuple(), {"lineno": 0, "stack_adjuster": []})()
+
     ## if ##
-    ## Note: definitions fall under the same as if statements ##
-    test = lambda line, current=[]: block_adjust(
-        gen, current, *unpack(source_iter=enumerate(line))[:-1]
-    )
-    assert test("    if     (yield 3):\n        return 4\n") == [
-        "    return  3",
-        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
-        "    if locals()['.internals']['.args'].pop():",
+    def test(line, current=[]):
+        return block_adjust(gen, current, *unpack("", enumerate(line), line)[:-2])
+
+    test("    if     (yield 3):\n        return 4\n")
+    assert gen.lines == [
+        "return  3",
+        "locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
+        "if      locals()['.internals']['.args'].pop():",
     ]
     ## elif ##
-    assert test("    elif (yield 3):\n        return 4\n") == [
-        "    else:",
-        "        return  3",
-        "        locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
-        "        if locals()['.internals']['.args'].pop():",
+    test("    elif (yield 3):\n        return 4\n")
+    assert gen.lines == [
+        "else:",
+        "    return  3",
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
+        "    if      locals()['.internals']['.args'].pop():",
     ]
     ## except ##
-    assert test(
-        "    except (yield 3):\n        return 4\n", ["    try:", "        pass"]
-    ) == [
+    gen.catch = []
+    test("    except (yield 3):\n        return 4\n", ["    try:", "        pass"])
+    assert gen.lines == [
         "    try:",
         "        try:",
         "            pass",
         "        except:",
         "            locals()['.internals']['.error'] = locals()['.internals']['.exc_info']()[1]",
+        "        return  3",
+        "        locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
+        "        if isinstance(locals()['.internals']['.error'],  locals()['.internals']['.args'].pop()):",
+        "            locals()['.continue_error'] = False",
+    ]
+    ## additional catch ##
+    test("    except (yield 3):\n        return 4\n", gen.lines)
+    assert gen.lines == [
+        "    try:",
+        "        try:",
+        "            pass",
+        "        except:",
+        "            locals()['.internals']['.error'] = locals()['.internals']['.exc_info']()[1]",
+        "        return  3",
+        "        locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
+        "        if isinstance(locals()['.internals']['.error'],  locals()['.internals']['.args'].pop()):",
+        "            locals()['.continue_error'] = False",
+        "        else:",
         "            return  3",
         "            locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
-        "            raise locals()['.internals']['.error']",
-        "    except locals()['.internals']['.args'].pop():",
+        "            if isinstance(locals()['.internals']['.error'],  locals()['.internals']['.args'].pop()):",
+        "                locals()['.continue_error'] = False",
     ]
     ## for ##
     new_lines = [
@@ -352,50 +447,109 @@ def test_generator_block_adjust() -> None:
     test_answer = lambda expr: test(
         "    %s (yield 3):\n        return 4\n" % expr
     ) == new_lines + ["    %s locals()['.internals']['.args'].pop():" % expr]
-    gen._internals["lineno"], gen._internals["jump_stack_adjuster"] = 0, []
-    assert test_answer("for")
-    assert gen._internals["lineno"] == 3
-    assert gen._internals["jump_stack_adjuster"] == [
-        [2]
-        + [
-            "        return  3",
-            "        locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
-        ]
-    ]
     ## while ##
-    gen._internals["lineno"], gen._internals["jump_stack_adjuster"] = 0, []
-    assert test_answer("while")
-    assert gen._internals["lineno"] == 3
-    assert gen._internals["jump_stack_adjuster"] == [
-        [2]
+    gen.lineno, gen.stack_adjuster = 0, []
+    test_answer("while")
+    assert gen.lineno == 3
+    assert gen.stack_adjuster == [
+        [0]
         + [
-            "        return  3",
-            "        locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
+            "    return  3",
+            "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
         ]
     ]
+    ## decorator ##
+    gen.lineno = 1
+    gen.decorator = True
+    test("@function(a=(yield 3))")
+    assert gen.lines == [
+        "return  3",
+        "locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
+        "locals()['.internals']['.decorator'] = locals()['.internals']['.decorator'](locals()['.internals']['partial'](function, a =locals()['.internals']['.args'].pop())",
+    ]
+    ## definition with and without decorator ##
+    gen = type("", tuple(), {"lineno": 0, "jump_stack_adjuster": []})()
+    gen.fixed_lines = 0
+    gen.source_iter = enumerate(empty_generator())
+    gen.lines = []
+    gen.lineno = 1
+    gen.source = "def f(a=(yield 3)):\n    pass\n"
+    gen.line = gen.source.split("\n")[0]
+    gen.index = 7
+    gen.char = ""
+    gen.decorator = False
+    test(gen.line)
+    assert gen.lines == [
+        "return  3",
+        "locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
+        "def f(a =locals()['.internals']['.args'].pop())",
+    ]
+    assert gen.lineno == 6
+    ## jump positions e.g. (yield from) ##
+    gen.jump_positions, gen.jump_stack = [], []
+    gen.lineno = 1
+    test("    if (yield from range(3)):")
+    assert gen.lines == [
+        "locals()['.internals']['.0']=locals()['.internals']['.yieldfrom']=iter( range(3))",
+        "for locals()['.internals']['.i'] in locals()['.internals']['.yieldfrom']:",
+        "    return locals()['.internals']['.i']",
+        "    if locals()['.internals']['.send']:",
+        "        return locals()['.internals']['.yieldfrom'].send(locals()['.internals']['.send'])",
+        "locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
+        "if      locals()['.internals']['.args'].pop():",
+    ]
+    assert gen.jump_positions == [[3, None]]
+    assert gen.jump_stack == [(0, 0)]
 
 
 def test_generator_string_collector_adjust() -> None:
-    gen = Generator()
+    """
+    required inputs:
+    self,
+    index: int,
+    char: str,
+    prev: tuple[int, int, str],
+    source_iter: Iterable,
+    line: str,
+    source: str,
+    lines: list[str],
+
+    required outputs:
+    index | line, prev, lines
+    """
+
     source = "    print('hi')\n    print(f'hello {(yield 3)}')\n    print(f'hello {{(yield 3)}}')"
-    gen._internals["lineno"] = 1
 
     def test(
         line_start: int, start: int, *answer: tuple[str, tuple[int, int, str], list]
     ) -> tuple[Iterable, int, str]:
         line = source[line_start:start]
         source_iter = enumerate(source[start:], start=start)
-        print(
-            string_collector_adjust(
-                gen, *next(source_iter), (0, 0, ""), source_iter, line, source, []
+
+        def setup():
+            index, char = next(source_iter)
+            self = type(
+                "",
+                tuple(),
+                {
+                    "lineno": 1,
+                    "index": index,
+                    "char": char,
+                    "prev": (0, 0, ""),
+                    "source_iter": source_iter,
+                    "line": line,
+                    "source": source,
+                    "lines": [],
+                    "jump_positions": [[None, None]],
+                },
             )
-        )
-        assert (
-            string_collector_adjust(
-                gen, *next(source_iter), (0, 0, ""), source_iter, line, source, []
-            )
-            == answer
-        )
+            return self
+
+        self = setup()
+        string_collector_adjust(self)
+        assert self.line == answer[0]
+        assert self.prev == answer[1]
+        assert self.lines == answer[2]
 
     ## string collection ##
     test(None, 10, *("    print('hi'", (10, 13, "'"), []))
@@ -1169,7 +1323,46 @@ def test_initialized() -> None:
 
 
 def test_value_yield() -> None:
-    pass
+    ## exceptions ##
+    @Generator
+    def test_case():
+        try:
+            yield 1
+        except (yield):
+            yield 2
+        except (yield):
+            yield 3
+        except Exception:
+            yield 4
+        finally:
+            yield 5
+
+    answer = """    try:
+        try:
+            return 1
+        except:
+            locals()['.internals']['.error'] = locals()['.internals']['.exc_info']()[1]
+        return
+        locals()['.internals']['.args'] += [locals()['.internals']['.send']]
+        if isinstance(locals()['.internals']['.error'],  locals()['.internals']['.args'].pop()):
+            locals()['.continue_error'] = False
+            return 2
+        else:
+            return
+            locals()['.internals']['.args'] += [locals()['.internals']['.send']]
+            if isinstance(locals()['.internals']['.error'],  locals()['.internals']['.args'].pop()):
+                locals()['.continue_error'] = False
+                return 3
+            else:
+                if isinstance(locals()['.internals']['.error'],  Exception):
+                    locals()['.continue_error'] = False
+                    return 4
+                else:
+                    locals()['.internals']['.continue_error'] = False
+                    raise locals()['.internals']['.error']
+    finally:
+        return 5"""
+    assert "\n".join(test_case()._internals["source_lines"]) == answer
 
 
 ####################################
@@ -1412,10 +1605,10 @@ test_generator_pickle()
 # record_jumps is tested in test_custom_adjustment
 test_generator_custom_adjustment()
 test_generator_update_jump_positions()
-test_generator_append_line()  ## need to test decorators
-# test_generator_block_adjust() ## just need to fix except adjust ##
-# test_generator_string_collector_adjust() ## need to implement ternary statements in unpack ##
-# test_generator_clean_source_lines() ## need to implement ternary statements in unpack and fix any other minor problems ##
+test_generator_append_line()
+test_generator_block_adjust()  ## finish decorators + definitions e.g. unpack ##
+test_generator_string_collector_adjust()
+# test_generator_clean_source_lines()  ## do basic tests for most users to see it working ##
 test_generator_create_state()
 test_generator_init_states()
 test_generator__init__()
@@ -1437,5 +1630,5 @@ test_yieldfrom()
 test_gen_expr()  ## fix patch_iterators so that it's scoped ##
 test_lambda_expr()
 test_initialized()
-# test_value_yield()
+test_value_yield()  ## need to add more test cases ##
 asyncio.run(async_generator_tests())
