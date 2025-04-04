@@ -278,7 +278,7 @@ class BaseGenerator:
                 else:
                     self._internals["source"] = dedent(getsource(getcode(FUNC)))
                     ## we need to record a linetable for the lineno since the source code gets modified ##
-                    self._internals["source_lines"] = clean_source_lines(self, True)
+                    clean_source_lines(self, True)
                     self._internals["lineno"] = (
                         self._internals["frame"].f_lineno
                         - self._internals["code"].co_firstlineno
@@ -321,7 +321,7 @@ class BaseGenerator:
                         clean_lambda(self, FUNC)
                     else:
                         self._internals["source"] = dedent(getsource(FUNC))
-                        self._internals["source_lines"] = clean_source_lines(self)
+                        clean_source_lines(self)
                         track_shift(FUNC, self._locals().get(".internals", {}))
                 else:
                     raise TypeError(

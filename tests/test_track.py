@@ -18,15 +18,14 @@ def test_track_shift() -> None:
 
 
 def test_patch_iterators() -> None:
-    if isinstance(__builtins__, dict):
-        objs = __builtins__.items()
-    else:
-        objs = vars(__builtins__).items()
     patch_iterators(globals())
-    for name, obj in objs:
-        if isinstance(obj, type) and issubclass(obj, Iterator | Iterable):
-            iter_init(obj)
+    iterators = get_builtin_iterators()
+    for name in iterators:
+        assert type(globals()[name]) == track
     ## unpatch the iters ##
+    unpatch_iterators(globals())
+    for name in iterators:
+        assert globals().get(name, None) is None
     ## try in local scope only ##
 
 

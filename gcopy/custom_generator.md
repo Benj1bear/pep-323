@@ -36,9 +36,13 @@ In order to achieve this the following assumptions are assumed to be true for th
 
 1. you can retrieve the correct source code of your generator expression or generator function.
 
-2. There are no compound statements present in the source code of your generator functions that have yields or yield froms.
+2. There are no compound statements present in the source code of your generator functions that have yields or yield froms and the current lineno if running an initialized generator past one execution shouldn't be on an encapsulation of yields.
 
-This assumption may become somewhat relaxed with the implementation of ```lineno_adjust``` and the use of ```get_instructions```, however, this is not guaranteed to work across all python versions since 3.11 is when python introduced ```CodeType.co_positions``` enabling source code positions with column offsets. In general, using compound statements is not recommended when trying to initialize a ```Generator``` instance from a running generator.
+This assumption may become somewhat relaxed with the implementation of ```lineno_adjust``` and the use of ```get_instructions```, however, this is not guaranteed to work across all python versions since 3.11 is when python introduced ```CodeType.co_positions``` enabling source code positions with column offsets. In general, using compound statements or stopping on an encapsulation is not recommended when trying to initialize a ```Generator``` instance from a running generator.
+
+Specifically for encapsulations, there's no way to know what values were sent but even if we did there's no way to account for control flow adjust unless we record that too. It's recommended to create a BaseGenerator before and use that since you can stop on encapsulations and retain the state with this object but in the case of regular generators we'd likely need to look into the interpreter frames value stack or otherwise monkey patch caches as much as necessary. Both solutions are very hacky for what is considered a nieche use case that's avoidable if you don't need the assumption that your generator must come from an initialized / already running, cpython generator that had values sent to it.
+
+On the other hand one thing that is possible is assuming the user didn't send any values at all, in which case we can replace all the inlined yields prior to the current execution to ```None```.
 
 3. you can retrieve the last line of execution in relation to your source code i.e. if ```gen``` is your generator then you should be able to go ```gen.gi_frame.f_lineno``` to retrieve this.
 
@@ -391,3 +395,5 @@ You should see that I've made a custom ```code``` and ```frame``` class that als
   - in the implementation every call to eval/exec made has tried to ensure the targeted scope is correct to be precise for the calls purpose otherwise there will be unbound local errors in some cases.
 
   - on ```BaseGenerator.__init__()``` the locals are still the same pointers in the original frame and thus instantiating a i.e. ```Generator``` or ```AsyncGenerator``` type will create pointers essentially. To avoid this, deepcopy the generator after instantiation.
+
+  - f-strings are unpacked. We could check if they need to be unpacked however it's likely about the same or worse than being unpacked without checking.

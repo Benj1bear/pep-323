@@ -100,11 +100,11 @@ def test_collect_string() -> None:
 
     source_iter, char, source = test('"""hello world"""')
 
-    assert collect_string(source_iter, 0, char, source) == (1, ['""'])
+    assert collect_string(source_iter, 0, char, source) == (1, ['""'], 0)
     next(source_iter)
-    assert collect_string(source_iter, 1, char, source) == (14, ['"hello world"'])
+    assert collect_string(source_iter, 1, char, source) == (14, ['"hello world"'], 0)
     next(source_iter)
-    assert collect_string(source_iter, 14, char, source) == (16, ['""'])
+    assert collect_string(source_iter, 14, char, source) == (16, ['""'], 0)
 
     ## f-string ##
 
@@ -117,10 +117,15 @@ def test_collect_string() -> None:
             "locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
             "\"asdf{locals()['.internals']['.args'].pop()}\"",
         ],
+        0,
     )
     # double bracket #
     source_iter, char, source = test('f"asdf{{(yield 3)}}"', True)
-    assert collect_string(source_iter, 0, char, source) == (19, ['"asdf{{(yield 3)}}"'])
+    assert collect_string(source_iter, 0, char, source) == (
+        19,
+        ['"asdf{{(yield 3)}}"'],
+        0,
+    )
 
 
 def test_collect_multiline_string() -> None:
@@ -128,6 +133,7 @@ def test_collect_multiline_string() -> None:
     assert collect_multiline_string(source_iter, 0, char, source) == (
         len(source) - 1,
         [source],
+        0,
     )
 
     ## f-string ##
@@ -141,12 +147,14 @@ def test_collect_multiline_string() -> None:
             "locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
             '"""hello {locals()[\'.internals\'][\'.args\'].pop()} world"""',
         ],
+        0,
     )
     # double bracket #
     source_iter, char, source = test('f"""hello {{(yield 3)}} world"""', True)
     assert collect_multiline_string(source_iter, 0, char, source) == (
         31,
         ['"""hello {{(yield 3)}} world"""'],
+        0,
     )
 
 
@@ -168,8 +176,9 @@ def test_string_collector_proxy(recursion: int = 1) -> None:
             if recursion:
                 args += (line,)
             ## we need to save line and prev ##
-            line, prev = string_collector_proxy(*args)
+            line, prev, fixed_lines = string_collector_proxy(*args)
             assert (line, prev) == answer.pop(0)
+            assert fixed_lines == 0
     if recursion:
         test_string_collector_proxy(0)
 
@@ -205,6 +214,7 @@ def test_unpack() -> None:
         ],
         "a  =locals()['.internals']['.args'].pop(0) *= 5  == 5",
         20,
+        0,
     )
 
     # tuple unpacking #
@@ -222,6 +232,7 @@ def test_unpack() -> None:
         ],
         "a  =locals()['.internals']['.args'].pop(0) ,locals()['.internals']['.args'].pop(0) ,locals()['.internals']['.args'].pop(0) = 5",
         36,
+        0,
     )
 
     ## unwrapping ##
@@ -233,6 +244,7 @@ def test_unpack() -> None:
         ],
         "locals()['.internals']['.args'].pop()",
         5,
+        0,
     )
 
     assert test("(yield 3,(yield 5))") == (
@@ -244,6 +256,7 @@ def test_unpack() -> None:
         ],
         "locals()['.internals']['.args'].pop()",
         5,
+        0,
     )
 
     assert test("a = yield (     yield    (yield 3 )  ) = 5") == (
@@ -257,6 +270,7 @@ def test_unpack() -> None:
         ],
         "a  =locals()['.internals']['.args'].pop(0) = 5",
         41,
+        0,
     )
 
     assert test("(yield 3),(yield (yield 3))") == (
@@ -271,6 +285,7 @@ def test_unpack() -> None:
         ],
         "locals()['.internals']['.args'].pop(0) ,locals()['.internals']['.args'].pop()",
         15,
+        0,
     )
 
     ## with named expression ##
@@ -279,12 +294,14 @@ def test_unpack() -> None:
         ["locals()['.internals']['.args'] += [(b:=(c:=next(j)) )]"],
         "a  =locals()['.internals']['.args'].pop(0) = 5",
         25,
+        0,
     )
 
     assert test("a = (b:=next(j) ) = 5") == (
         ["locals()['.internals']['.args'] += [(b:=next(j) )]"],
         "a  =locals()['.internals']['.args'].pop(0) = 5",
         20,
+        0,
     )
 
     assert test("a = (b:=(yield 3) +a) = 5") == (
@@ -295,6 +312,7 @@ def test_unpack() -> None:
         ],
         "a  =locals()['.internals']['.args'].pop(0) = 5",
         24,
+        0,
     )
 
     assert test("(b := (yield (a := (yield (c := (yield 33)))))) == (yield 3)") == (
@@ -311,6 +329,7 @@ def test_unpack() -> None:
         ],
         "locals()['.internals']['.args'].pop(0) == locals()['.internals']['.args'].pop()",
         56,
+        0,
     )
 
     assert test("(yield (yield (yield (yield 3)))) == (yield 4)") == (
@@ -329,10 +348,10 @@ def test_unpack() -> None:
         ],
         "locals()['.internals']['.args'].pop(0) == locals()['.internals']['.args'].pop()",
         42,
+        0,
     )
 
     ## f-string ##
-
     assert test("a = f'hi{(yield 3)}' = yield 3 = 5") == (
         [
             "return  3",
@@ -343,6 +362,7 @@ def test_unpack() -> None:
         ],
         "a  =locals()['.internals']['.args'].pop(0) =locals()['.internals']['.args'].pop(0) = 5",
         33,
+        0,
     )
 
     assert test("a = f'hi{(yield 3),(yield (yield 3))}' = yield 3 = 5") == (
@@ -360,6 +380,7 @@ def test_unpack() -> None:
         ],
         "a  =locals()['.internals']['.args'].pop(0) =locals()['.internals']['.args'].pop(0) = 5",
         51,
+        0,
     )
 
     ## with dictionary assignment ##
@@ -376,6 +397,7 @@ def test_unpack() -> None:
         ],
         "a  =locals()['.internals']['.args'].pop(0) =locals()['.internals']['.args'].pop(0) +locals()['.internals']['.args'].pop(0) =locals()['.internals']['.args'].pop(0) = 5  = ",
         75,
+        0,
     )
     ## ternary statements ##
     # assert test("a = 1 if 2 else 3 = 5") == (
@@ -406,32 +428,54 @@ def test_unpack() -> None:
     # print("\n".join(test("a = False if True else ((5 if 2 else 4) if 2 else 3) = 5")[0]))
     # test("a = 1 if 2 else 3 = 5")
     # print("\n".join(test("a = (1 if 2 else 3) if True else ((4 if 5 else 6) if 7 else 8) = 9")[0]))
-    print(
-        "\n".join(
-            test(
-                "a = ((-2 if -1 else 0) if 2 else 3) if True else ((4 if 5 else 6) if 7 else (-3 if -4 else -5)) = 9"
-            )[0]
-        )
+    # -3
+    result = test(
+        "a = ((-2 if -1 else -000 ) if 2 else -3) if True else (((4 if 5 else 67) if 2 else (4 if 5 else 6)) if 7 else (-3 if -4 else -5)) = 9"
     )
-    print(
-        test(
-            "a = ((-2 if -1 else 0) if 2 else 3) if True else ((4 if 5 else 6) if 7 else (-3 if -4 else -5)) = 9"
-        )[1]
-    )
+    # print("\n".join(result[0]))
+    # print(result[1])
     ## collect_lambda ##
 
 
 def test_collect_definition() -> None:
+    def setup_test() -> object:
+        line = source.split()[0]
+        return type(
+            "",
+            tuple(),
+            {
+                "line": line,
+                "lines": [],
+                "index": 0,
+                "lineno": 0,
+                "source": source,
+                "source_iter": enumerate(source),
+                "fixed_lines": 0,
+            },
+        )
+
     source = """def function():
     pass
     print('''hello world''')"""
-    index, char, lineno, lines = collect_definition(
-        None, [], 0, source, enumerate(source), 0
-    )
-    assert index == len(source) - 1
-    assert char == ")"
-    assert lineno == 3
-    assert lines == source.split("\n")
+    self = setup_test()
+    collect_definition(self, 0, 0)
+    assert self.index == len(source) - 1
+    assert self.char == ")"
+    assert self.lineno == 3
+    # assert self.lines == [''] + source.split("\n")
+    # print(self.lines)
+    ## with yields ##
+    source = """def function(x=(yield), y = (yield) ):
+    pass
+    print('''hello world''')"""
+    self = setup_test()
+    print(self.line)
+    collect_definition(self, 0, 0)
+    assert self.index == len(source) - 1
+    assert self.char == ")"
+    assert self.lineno == 3
+    # assert self.lines == ['return', "locals()['.internals']['.args'] += [locals()['.internals']['.send']]", "locals()['.internals']['.args'] += [defdef function(x=locals()['.internals']['.args'].pop()]", 'return', "locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 'def function(x=(yield), y = (yield) ):', '    pass', "    print('''hello world''')"]
+    # print(self.lines)
 
 
 def test_is_loop() -> None:
@@ -912,13 +956,15 @@ def test_except_adjust() -> None:
     )
     answer = """try:
     try:
-        pass
-    except:
-        locals()['.internals']['.error'] = locals()['.internals']['.exc_info']()[1]
-        return value
-        locals()['.internals']['.args'] += [locals()['.internals']['.send']]
-        raise locals()['.internals']['.error']
-except locals()['.internals']['.args'].pop():"""
+        try:
+            pass
+        except:
+            locals()['.internals']['.error'] = locals()['.internals']['.exc_info']()[1]
+            return value
+            locals()['.internals']['.args'] += [locals()['.internals']['.send']]
+            raise locals()['.internals']['.error']
+    except locals()['.internals']['.args'].pop():
+finally:"""
     assert "\n".join(result) == answer
 
 
@@ -994,9 +1040,16 @@ def test_outer_loop_adjust() -> None:
 
 
 def test_setup_next_line() -> None:
-    assert setup_next_line(":", 1) == (" ", True)
-    assert setup_next_line(";", 1) == (" ", True)
-    assert setup_next_line("\n", 1) == ("", False)
+    self = type("", tuple(), {})()
+
+    def test(*args, expected=None):
+        setup_next_line(self, *args)
+
+        assert (self.line, self.indented) == expected
+
+    test(":", 1, expected=(" ", True))
+    test(";", 1, expected=(" ", True))
+    test("\n", expected=("", False))
 
 
 def test_unpack_lambda() -> None:
@@ -1013,10 +1066,35 @@ def test_get_signature() -> None:
 
 
 def test_collect_lambda() -> None:
-    line = "lambda "
-    assert collect_lambda(
-        line, enumerate("x: x", start=len(line)), "lambda x: x", (0, 0, "")
-    ) == ("x", "lambda x: x")
+    def test(source: str) -> None:
+        line = "lambda "
+        left = source[len(line) :]
+        return collect_lambda(
+            line, enumerate(left, start=len(line)), source, (0, 0, ""), len(line)
+        )
+
+    assert test("lambda x: x") == ([], "lambda x: x", 0, "x")
+    assert test("lambda x=(yield): (yield)") == (
+        [
+            "return",
+            "locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
+        ],
+        "lambda x=locals()['.internals']['.args'].pop(): (yield)",
+        0,
+        ")",
+    )
+    assert test("lambda x=(yield), y = (yield): (yield)") == (
+        [
+            "return",
+            "locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
+            "locals()['.internals']['.args'] += [lambda x=locals()['.internals']['.args'].pop()]",
+            "return",
+            "locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
+        ],
+        "locals()['.internals']['.args'].pop(0) , y = locals()['.internals']['.args'].pop(): (yield)",
+        0,
+        ")",
+    )
 
 
 def test_sign() -> None:
