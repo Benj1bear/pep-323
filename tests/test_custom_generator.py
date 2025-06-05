@@ -1,7 +1,16 @@
+## tests are for cleaning + adjusting + pickling ##
+# record_jumps is tested in test_custom_adjustment
+
+#test_generator_block_adjust()  ## finish decorators + definitions e.g. unpack ##
+# test_generator_clean_source_lines()  ## do basic tests for most users to see it working ##
+# Generator__call__ is tested in test_generator__call__
+# test_gen_expr()  ## fix patch_iterators so that it's scoped ##
+# test_value_yield()  ## need to add more test cases ##
+
 import asyncio
 from collections.abc import Iterable
 import pickle
-from functools import partial, wraps
+from functools import partial
 from inspect import currentframe
 from sys import exc_info
 
@@ -182,6 +191,8 @@ def test_generator_pickle() -> None:
     test_Pickler(gen)
     ## make sure no change in the attrs ##
     assert attrs_before == dir(gen._internals["frame"])
+    ## instantiate the generator since it's not initialized ##
+    gen = gen()
     assert next(gen) == 1
     ## copy the generator ##
     gen2 = gen.copy()
@@ -209,7 +220,7 @@ def test_generator_custom_adjustment() -> None:
         "        return locals()['.internals']['.yieldfrom'].send(locals()['.internals']['.send'])",
     ]
     ## check the jump positions ##
-    assert self.jump_positions == [[1, 5]]
+    assert self.jump_positions == [[1, 4]]
     ## for ##
     self.jump_positions, self.jump_stack = [], []
     assert test("for ") == ["for "]
@@ -725,7 +736,7 @@ def test_generator_create_state() -> None:
     ## Note: the jump_positions are lineno ##
     ## based get_loops changes them to index based ##
     start_indexes = [0, 2, 4]
-    end_indexes = [13, 12, 11]
+    end_indexes = [12, 11, 10]
     gen._internals["loops"] = list(zip(start_indexes, end_indexes))
     assert test(8) == (
         [
@@ -748,7 +759,6 @@ def test_generator_create_state() -> None:
             "               return 3",
             "           return 4",
             "        print(j)",
-            "    print(i)",
             "    for i in locals()['.internals']['.4']:",
             "        print(i)",
             "        for j in range(4):",
@@ -783,7 +793,6 @@ def test_generator_create_state() -> None:
             9,
             10,
             11,
-            12,
             0,
             1,
             2,
@@ -797,7 +806,6 @@ def test_generator_create_state() -> None:
             10,
             11,
             12,
-            13,
         ],
     )
 
@@ -813,7 +821,11 @@ def test_generator_init_states() -> None:
         assert next(gen._internals["state_generator"], True)
 
     ## uninitialized generator ##
-    test(Generator(simple_generator))
+    try:
+        test(Generator(simple_generator))
+        assert False
+    except TypeError:
+        pass
     ## initialized generator ##
     test(Generator(simple_generator()))
 
@@ -851,10 +863,12 @@ def test_generator__call__() -> None:
         yield c
 
     gen = Generator(test)
+    assert gen._internals["initialized"] == False
     del gen._internals["state_generator"]
     ## initializes but also returns itself ##
     gen = gen(1, 2)
     assert gen is not None
+    assert gen._internals["initialized"]
     gen._internals["frame"].f_locals
     assert gen._internals["frame"].f_locals == {
         ".internals": {
@@ -1011,7 +1025,7 @@ def test_generator__iter__() -> None:
         yield 2
         return 3
 
-    assert [i for i in gen] == [1, 2]
+    assert [i for i in gen()] == [1, 2]
 
     @Generator
     def test_case():
@@ -1020,10 +1034,8 @@ def test_generator__iter__() -> None:
             yield i
 
     gen = test_case()
-    ## acts as the fishhook iterator for now ##
-    range_iterator = iter(range(3))
-    next(range_iterator)
-    gen._locals()[".internals"] = {".4": range_iterator, "EOF": EOF}
+    ## because it's not from an already running generator ##
+    ## the fishook patches on the iterators are already applied ##
     assert [i for i in gen] == [1, 0, 1, 2]
 
 
@@ -1121,6 +1133,7 @@ def test_generator_send() -> None:
             "running": False,
             "suspended": False,
             "yieldfrom": None,
+            "initialized": True,
         }
     )
     gen._internals["state_generator"] = gen._init_states()
@@ -1200,6 +1213,14 @@ def test_closure() -> None:
     test()
 
 
+def test_yieldfrom() -> None:
+    @Generator
+    def test():
+        yield from range(3)
+
+    assert [i for i in test()] == [0, 1, 2]
+
+
 def test_recursion() -> None:
     @Generator
     def test(depth=0):
@@ -1209,14 +1230,6 @@ def test_recursion() -> None:
 
     gen = test()
     assert [next(gen) for i in range(10)] == list(range(1, 11))
-
-
-def test_yieldfrom() -> None:
-    @Generator
-    def test():
-        yield from range(3)
-
-    assert [i for i in test()] == [0, 1, 2]
 
 
 def test_gen_expr() -> None:
@@ -1607,41 +1620,5 @@ async def async_generator_tests() -> None:
     await test_asyncgenerator__anext__()
     await test_asyncgenerator__aiter__()
 
-
 if __name__ == "__main__":
-    # TODO can remove, simply run pytest .
-    ## tests are for cleaning + adjusting + pickling ##
-    test_EOF()
-    test_Pickler()
-    test_picklers()
-    test_generator_pickle()
-    # record_jumps is tested in test_custom_adjustment
-    test_generator_custom_adjustment()
-    test_generator_update_jump_positions()
-    test_generator_append_line()
-    test_generator_block_adjust()  ## finish decorators + definitions e.g. unpack ##
-    test_generator_string_collector_adjust()
-    # test_generator_clean_source_lines()  ## do basic tests for most users to see it working ##
-    test_generator_create_state()
-    test_generator_init_states()
-    test_generator__init__()
-    # Generator__call__ is tested in test_generator__call__
-    test_generator__call__()
-    test_generator_locals()
-    test_generator_frame_init()
-    test_generator_update()
-    test_generator__next__()
-    test_generator__iter__()
-    test_generator__close()
-    test_generator_close()
-    test_generator_send()
-    test_generator_throw()
-    test_generator_type_checking()
-    test_closure()
-    test_recursion()
-    test_yieldfrom()
-    test_gen_expr()  ## fix patch_iterators so that it's scoped ##
-    test_lambda_expr()
-    test_initialized()
-    test_value_yield()  ## need to add more test cases ##
     asyncio.run(async_generator_tests())

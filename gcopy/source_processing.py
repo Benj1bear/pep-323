@@ -2,21 +2,18 @@
 ### cleaning/extracting/adjusting source code ###
 #################################################
 
-## needed to access c level memory for the builtin iterators ##
-from functools import partial, wraps
+from functools import partial
 from inspect import currentframe, findsource, getsource, signature
 from itertools import chain
 from sys import version_info
-from types import CodeType  # , FrameType ## lineno_adjust
-from types import CellType, FrameType, FunctionType, GeneratorType
-from typing import Any, Callable, Iterable, Iterator
+from types import CodeType, CellType, FunctionType, GeneratorType# , FrameType ## lineno_adjust
+from typing import Any, Iterable
 
 ## to ensure gcopy.custom_generator.Generator can be used in exec for sign ##
 from gcopy.track import get_indent, track_adjust
 from gcopy.utils import (
     attr_cmp,
     cli_findsource,
-    code_attrs,
     code_cmp,
     empty_generator,
     get_nonlocals,
@@ -1897,7 +1894,11 @@ def sign(
     closure: tuple[CellType] = None,
 ) -> FunctionType:
     """signs a function with the signature of another function"""
+    annotations = FUNC2.__annotations__
+    # temporarily remove the annotations from the signature to avoid scope issues
+    FUNC2.__annotations__ = {}
     _signature = format(signature(FUNC2))
+    FUNC2.__annotations__ = annotations
     if boundmethod:
         _signature = "(self, " + _signature[1:]
     _signature = FUNC2.__name__ + _signature + ":"
@@ -1908,6 +1909,7 @@ def sign(
     temp = locals()[FUNC2.__name__]
     temp.__source__ = source
     temp.__doc__ = FUNC2.__doc__
+    temp.__annotations__ = annotations
     return temp
 
 
@@ -1943,8 +1945,9 @@ def custom_adjustment(self: object, line: str, number_of_indents: int = 0) -> li
     result = yield_adjust(temp_line, indent)
     if temp_line.startswith("yield from "):
         lineno = self.lineno
-        ## lineno + 1 since this is not a loop ##
-        self.jump_positions += [[lineno + 1, lineno + len(result)]]
+        ## lineno + 1 it starts after this line ##
+        ## and lineno + len(result) - 1 to include the full loops block subtract the current line ##
+        self.jump_positions += [[lineno + 1, lineno + len(result) - 1]]
     if result is not None:
         return result
     ## loops ##

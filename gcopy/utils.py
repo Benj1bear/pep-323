@@ -108,13 +108,6 @@ def hasattrs(self: Any, attrs: Iterable[str]) -> bool:
     return True
 
 
-def chain(*iterators: tuple[Iterable]) -> GeneratorType:
-    """appends iterators together to yield from one after the other"""
-    for iterator in iterators:
-        for value in iterator:
-            yield value
-
-
 def get_nonlocals(FUNC: FunctionType) -> dict:
     """Gets the nonlocals or closure variables of a function"""
     cells = getattr(FUNC, "__closure__", None)
@@ -336,7 +329,7 @@ def is_running(iter: Iterable) -> bool:
     index = get_iter_index(iter)
     return index > 0 or index < -1
 
-
+## used in get_iter_index for an instance based check since no such type is in .py stdlib (I think) ##
 memory_iterator = type(iter(memoryview(bytearray())))
 
 

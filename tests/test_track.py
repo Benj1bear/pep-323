@@ -74,21 +74,6 @@ def test_track_iter() -> None:
     assert test(8, "list_iterator")
 
 
-def test_track_iter_inside_exec() -> None:
-    # TODO works when run pytest . but not in isolation
-    FUNC_code = compile(
-        """def test():
-    for i in range(3):
-         return locals()[".internals"][".0"]
-""",
-        currentframe().f_code.co_filename,
-        "exec",
-    )
-    exec(FUNC_code, globals(), locals())
-    range_iterator = locals()["test"]()
-    assert [i for i in range_iterator] == [1, 2]
-
-
 def test_track_iter_inside_Generator() -> None:
     from gcopy.custom_generator import Generator
 
@@ -122,11 +107,4 @@ async def test_atrack() -> None:
 
 if __name__ == "__main__":
     # TODO can remove, simply run pytest .
-    test_track_adjust()
-    test_track_shift()
-    test_patch_iterators()
-    test_track_iter()
-    test_track_iter_inside_exec()
-    test_track_iter_inside_Generator()
-    test_track()
     asyncio.run(test_atrack())

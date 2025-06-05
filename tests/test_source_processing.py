@@ -1,3 +1,9 @@
+# test_lineno_adjust() ## not going to be implemented at present time ##
+## tested in unpack_genexpr: update_line
+## tested in test_unpack: named_adjust, unpack_adjust, update_lines, check_ID
+# tested in control_flow_adjust: statement_adjust
+## Generator source cleaning is tested in test_custom_generator ##
+
 from sys import version_info
 from types import FunctionType
 from typing import Iterable
@@ -15,7 +21,6 @@ from gcopy.source_processing import (
     extract_genexpr,
     extract_lambda,
     extract_source_from_comparison,
-    genexpr_adjust,
     get_indent,
     get_loops,
     get_signature,
@@ -34,16 +39,13 @@ from gcopy.source_processing import (
     sign,
     signature,
     singly_space,
-    skip_alt_stmnt_proxy,
     skip_alternative_statements,
     skip_blocks,
     skip_line_continuation,
     skip_source_definition,
-    string_collector_adjust,
     string_collector_proxy,
     ternary_adjust,
     unpack,
-    unpack_adjust,
     unpack_genexpr,
     unpack_lambda,
     update_depth,
@@ -1260,53 +1262,3 @@ def test_sign() -> None:
     assert signature(f) == signature(test)
     assert f.__doc__ == test.__doc__
     assert f.__annotations__ == test.__annotations__
-
-
-if __name__ == "__main__":
-    # TODO can remove, simply run pytest .
-    test_update_depth()
-    test_get_indent()
-    # test_lineno_adjust() ## not going to be implemented at present time ##
-    test_line_adjust()
-    ## tested in unpack_genexpr: update_line
-    test_unpack_genexpr()
-    test_skip_line_continuation()
-    test_skip_source_definition()
-    test_collect_string()
-    test_collect_multiline_string()
-    test_string_collector_proxy()
-    test_inverse_bracket()
-    ## tested in test_unpack: named_adjust, unpack_adjust, update_lines, check_ID
-    test_is_item()
-    test_unpack()
-    test_ternary_adjust()
-    test_collect_definition()
-    test_is_alternative_statement()
-    test_is_loop()
-    test_is_definition()
-    test_skip_alternative_statements()
-    # tested in control_flow_adjust: statement_adjust
-    test_control_flow_adjust()
-    test_indent_lines()
-    test_iter_adjust()
-    test_is_statement()
-    test_skip_blocks()
-    test_loop_adjust()
-    test_yield_adjust()
-    test_get_loops()
-    test_extract_source_from_comparison()
-    test_expr_getsource()
-    test_extract_genexpr()
-    test_extract_lambda()
-    test_extract_function()
-    test_except_adjust()
-    test_extract_as()
-    test_except_catch_adjust()
-    test_singly_space()
-    test_outer_loop_adjust()
-    test_setup_next_line()
-    test_unpack_lambda()
-    test_get_signature()
-    test_collect_lambda()
-    test_sign()
-    ## Generator source cleaning is tested in test_custom_generator ##

@@ -5,9 +5,8 @@ import builtins  # # for consistency (it switches between a module and a dict) #
 from inspect import currentframe, getframeinfo, getsourcelines
 from types import FrameType, FunctionType
 
-## for the monkey patching ##
+## imports used for the monkey patching ##
 from typing import Any, Iterable, Iterator
-
 from gcopy.utils import Wrapper, get_history_item, getcode, is_cli
 
 
