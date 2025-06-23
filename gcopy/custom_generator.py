@@ -319,7 +319,7 @@ class BaseGenerator:
                         self._internals["lineno"] += 1 - bool(
                             get_loops(
                                 self._internals["lineno"],
-                                self._internals["jump_positions"],
+                                self._internals.get("jump_positions", []),
                             )
                         )
                     track_shift(FUNC, self._locals().get(".internals", {}))
@@ -390,7 +390,7 @@ class BaseGenerator:
                 ## uses (since it'll become an empty generator) which is 
                 ## unusual/unexpected behavior) ##
                 self._internals["state_generator"] = self._init_states()
-        self._internals["loops"] = get_loops(self._internals["lineno"], self._internals["jump_positions"])
+        self._internals["loops"] = get_loops(self._internals["lineno"], self._internals.get("jump_positions", []))
         ## if no state then it must be EOF ##
         while self._internals["state"]:
             yield self._create_state()
@@ -541,7 +541,7 @@ class BaseGenerator:
         else:
             ## update the lineno ##
             self._internals["lineno"] = self._internals["linetable"][adjusted_lineno] + 1
-            loops = self._internals["loops"] = get_loops(self._internals["lineno"], self._internals["jump_positions"])
+            loops = self._internals["loops"] = get_loops(self._internals["lineno"], self._internals.get("jump_positions", []))
             if not loops:
                 ## if we can advance the lineno then advance it ##
                 ## else (since not in loop) EOF ##

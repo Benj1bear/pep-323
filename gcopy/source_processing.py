@@ -407,7 +407,6 @@ def named_adjust(
         line_iter,
         source=source,
         index=index,
-        unwrapping=True,
         depth_total=depth_total,
         depths=depths,
         fixed_lines=fixed_lines,
@@ -437,7 +436,6 @@ def update_lines(
     yielding: bool = False,
     source: str = "",
     index: int = 0,
-    unwrapping: bool = False,
     depth_total: int = 0,
     depths: dict = {},
     fixed_lines: int = 0,
@@ -448,8 +446,8 @@ def update_lines(
     added to the final lines
     """
     if not line.isspace():
-        ## unwrapping ##
-        if unwrap:
+        ## unwrapping ## - for brackets
+        if unwrap is not None:
             temp_lines, temp_final_line, _, fixed_lines = unpack(
                 source_iter=unwrap,
                 source=source,
@@ -472,7 +470,7 @@ def update_lines(
                 try_set(depths.get(depth_total, None), -1, len(lines))
                 lines += temp_lines
                 line += temp_final_line
-        ## unpacking ##
+        ## unpacking ## - for operators
         else:
             ## variable ##
             if line.strip().isalnum() or named:
@@ -588,7 +586,6 @@ def unpack(
                 depths[depth_total][0] = depths[depth_total][0] - new_index - end_index
         ## splitting operators ##
         elif char in ",=" or char in operators and is_item(line):
-            ## maybe replace operator with next_char ##
             if in_ternary_else:
                 if char == "=" and source[end_index + 1 : end_index + 2] != "=":
                     try_set(depths.get(depth_total, None), 2, None)
@@ -841,8 +838,6 @@ def check_ID(
         depth_total -= 1
         adjusted = True  ## to avoid: line += char (we include it in the final_line as the operator or in unwrapping)
     elif 1 < len(ID) < 4 and ID in ("and", "or", "is", "in"):
-        print(line, final_line)
-        print("HERE!!!!!!!!!")
         line = line[: -len(ID)]
         line, lines, final_line, named, depths, fixed_lines = update_lines(
             line,
@@ -2241,6 +2236,7 @@ def clean_source_lines(gen: object, running: bool = False) -> None:
         self.lines,
         self.indented,
         self.decorator,
+        self.assigned, ## to detect value yields without brackets ##
         self.lineno,
         self.fixed_lines,
         self.depth,
@@ -2260,6 +2256,7 @@ def clean_source_lines(gen: object, running: bool = False) -> None:
         [],
         False,
         False,
+        False,
         0,
         0,
         0,
@@ -2271,7 +2268,6 @@ def clean_source_lines(gen: object, running: bool = False) -> None:
         " " * 4,
         (0, 0, ""),
     )
-
     ## setup source as an iterator and making sure the first indentation's correct ##
     ## we need to make sure the source is saved for skipping for line continuations ##
     self.source = skip_source_definition(gen._internals["source"])
@@ -2321,13 +2317,15 @@ def clean_source_lines(gen: object, running: bool = False) -> None:
                 self.fixed_lineno = None
                 append_line(self, running)
                 self.depth = 0
+            self.assigned = False
         else:
             self.line += self.char
             ## detect value yields [yield] and {yield} is not possible only (yield) ##
             self.depth = update_depth(self.depth, self.char)
             ## '... = yield ...' and '... = yield from ...'
-            assigned = self.char == "="
-            if (self.depth or assigned) and self.char.isalnum():
+            if not self.assigned and self.char == "=":
+                self.assigned = True
+            if (self.depth or self.assigned) and self.char.isalnum():
                 source_update_ID(
                     self,
                     self.source[self.index + 1 : self.index + 2],  ## : index + 2 in case of IndexError ##
@@ -2373,41 +2371,65 @@ def source_update_ID(
         self.lineno += 1
         self.ID = ""
     elif self.ID == "yield" and next_char in " )]}\n;\\":
-        # print(self.line," --- STAGE 1")
-        new_lines, final_line, self.index, fixed_lines = unpack(
-            self.line, self.source_iter, self.source, index=self.index
-        )
-
-        # print(final_line," --- STAGE 2")
-        # from sys import exit
-        # exit()
-        # print(self.source[self.index])
-        add_fixed_lines(self, fixed_lines)
-        final_line = " " * get_indent(self.line) + final_line.lstrip()
-        if self.line[get_indent(self.line) :].startswith("elif "):
-            self.indent_adjust = 4
-        length_before = len(self.lines)
-        block_adjust(self, self.lines, new_lines, final_line)
-        if running:
-            self.linetable += [self.lineno] * (len(self.lines) - length_before)
-
-        if is_definition(final_line[get_indent(final_line) :]):
-            setup_next_line(self)
-        else:
-            self.indentation = get_indent(self.lines[-1]) + self.indent_adjust
-            setup_next_line(self, self.source[self.index], self.indentation)
-        if self.indent_adjust:
-            self.line = " " * self.indentation
-            self.space = self.index
         self.ID = ""
-        # print(self.lines[-1]," --- STAGE 3")
+        if self.depth:
+            self.depth = 0
+            unpack_yield(self, running, self.line)
+        else:
+            ## you can have yield from as a value yield ##
+            self.index += 1
+            yield_from = self.source[self.index:].lstrip().startswith("from ")
+            if yield_from:
+                ## skip to the from ##
+                for self.index, self.char in self.source_iter:
+                    if self.char.isalnum():
+                        self.ID += self.char
+                    elif self.ID:
+                        break
+            self.line = self.line[:-6]
+            unpack_yield(self, running, yield_from=yield_from)
     ## ternary statement ##
     elif self.ID == "if" and next_char in " \\" and self.line[:-2].lstrip():
+        ## _ would be self.index, however, we don't need it on this iteration ##
         new_lines, final_line, _, fixed_lines = unpack(
             self.line, self.source_iter, source=self.source, index=self.index
         )
         add_fixed_lines(self, fixed_lines)
         self.block_adjust(self, new_lines, final_line)
+
+
+def unpack_yield(self, running: bool, line: str|None = None, yield_from: bool = False) -> None:
+    """proxy to unpack value yields"""
+    indents = get_indent(self.line)
+    new_lines, final_line, self.index, fixed_lines = unpack(
+        line, self.source_iter, self.source, index=self.index
+    )
+    add_fixed_lines(self, fixed_lines)
+    if line is None:
+        head = "yield "
+        if yield_from:
+            head += " from "
+        new_lines += yield_adjust(head + final_line, "")
+        final_line = self.line + "locals()['.internals']['.send']"
+    final_line = " " * indents + final_line.lstrip()
+    if self.line[indents:].startswith("elif "):
+        self.indent_adjust = 4
+    length_before = len(self.lines)
+    block_adjust(self, self.lines, new_lines, final_line)
+    if running:
+        self.linetable += [self.lineno] * (len(self.lines) - length_before)
+
+    if is_definition(final_line[get_indent(final_line) :]):
+        setup_next_line(self)
+    else:
+        self.indentation = get_indent(self.lines[-1]) + self.indent_adjust
+        setup_next_line(self, self.source[self.index], self.indentation)
+    if self.indent_adjust:
+        self.line = " " * self.indentation
+    ## setup the variables for the next line ##
+    self.assigned = False    
+    ## important to ensure the indentation is correct ##
+    self.space = self.index
 
 
 def clean_lambda(self: GeneratorType, FUNC: FunctionType) -> None:

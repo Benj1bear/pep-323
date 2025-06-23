@@ -144,6 +144,7 @@ Note: the internal variables ```.send, .frame, .self``` will be available during
 finish testing + review everything
 
 clean_source_lines:
+
   to be checked:
   - indentation of lines from unpacking in clean_source_lines needs checking
   - test closing up of brackets for both unpack + clean_source_lines
@@ -163,19 +164,21 @@ unpack:
   or consider removing char in " \\" case since it's
   only for formatting
 
+- use look aheads to avoid unnecessary code adjustments
+
 
 Figure out later:
+
   source_processing:
-    - fix extract_function for expr_getsource tests
-      - then test it in test_source_processing:
-        - test_expr_getsource
-        - test_extract_function
+
+- fix extract_function for expr_getsource tests
+  - then test it in test_source_processing:
+    - test_expr_getsource
+    - test_extract_function
 
 - examples of how to use ag_await and then cater for it if relevant
 
 utils:
   - test utils.cli_getsource
-- consider making patch iterators scope specific
-  - finish testing patch_iterators with testing this
 - consider determining lineno given encapsulated yield and the send values
   - test_lambda_expr in test_custom_generator for encapsulated yields
