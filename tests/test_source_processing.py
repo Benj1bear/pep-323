@@ -17,6 +17,7 @@ from gcopy.source_processing import (
     except_adjust,
     expr_getsource,
     extract_as,
+    end_offset_adjust,
     extract_function,
     extract_genexpr,
     extract_lambda,
@@ -512,6 +513,11 @@ def test_unpack() -> None:
         21,
         0,
     )
+    ## issue where variable assignment isn't working correctly only on yields/yield froms ##
+    ##  without brackets (e.g. works on value yields but not regular yields) ##
+    ## TODO write tests for these
+    # a=(yield [1,2,3])
+    # b=(yield from [1,2,3])
 
 
 def test_ternary_adjust() -> None:
@@ -1007,14 +1013,49 @@ def test_get_loops() -> None:
 
 
 def test_extract_source_from_comparison() -> None:
-    ## genexpr extractor ##
-    code_obj = eval("(i for i \\\n   in range(3))").gi_code
-    source = "iter1, iter2 = (i for i in range(3)), (j for j in (i for i in range(5)) if j in (i for i in range(2)) )"
-    assert extract_source_from_comparison(code_obj, source, extract_genexpr) == "(i for i in range(3))"
     ## lambda extractor ##
     code_obj = eval("lambda x: print('hi')").__code__
     source = "lambda x:x,lambda y:lambda z:z, lambda a:a, lambda x: print('hi')"
     assert extract_source_from_comparison(code_obj, source, extract_lambda) == "lambda x: print('hi')"
+    ## genexpr extractor ##
+    code_obj = eval("(i for i \\\n   in range(3))").gi_code
+    source = "iter1, iter2 = (i for i in range(3)), (j for j in (i for i in range(5)) if j in (i for i in range(2)) )"
+    assert extract_source_from_comparison(code_obj, source, extract_genexpr) == "(i for i in range(3))"
+    ## function extractor ##
+    def test():
+        print(1)
+        return 1
+    code_obj = test.__code__
+    source = """
+    def test():
+        print(2)
+        return 2
+    def test():
+        print(1)
+        return 1"""
+    args = (code_obj, 
+        source, 
+        extract_function, 
+        test.__globals__, 
+        {}, 
+        "exec")
+    assert extract_source_from_comparison(*args) == """def test():
+    print(2)
+    return 2"""
+    assert extract_source_from_comparison(*args, strictness=2) == """def test():
+    print(1)
+    return 1"""
+    ## make sure strictness is validated ##
+    def test(error: Exception, *args, **kwargs) -> None:
+        try:
+            extract_source_from_comparison(*args, **kwargs)
+        except error:
+            return
+        raise AssertionError("Error %s not raised for strictness %s" % (error, strictness))
+    ## negative value, zero, non-integer, exceeding value ##
+    cases = ((ValueError, -1),(ValueError, 0),(Exception, 0.4),(Exception, 3))
+    for error, strict in cases:
+        test(error, *args, strictness=strict)
 
 
 def test_expr_getsource() -> None:
@@ -1027,18 +1068,25 @@ def test_expr_getsource() -> None:
     def test():
         j = 3
         f = lambda: j
+        
         yield f
         f = (j for i in range(3))
         yield f
         f = (f for i in range(3))
         yield f
-
     gen = test()
     assert expr_getsource(next(gen)) == "lambda: j"
     assert expr_getsource(next(gen)) == "(j for i in range(3))"
     assert expr_getsource(next(gen)) == "(f for i in range(3))"
-    ## functions ##
-    # print(expr_getsource(test))
+    ## functions (test is sensitive to indentations) ##
+    assert expr_getsource(test) == """def test():
+    j = 3
+    f = lambda: j
+    yield f
+    f = (j for i in range(3))
+    yield f
+    f = (f for i in range(3))
+    yield f"""
 
 
 def test_extract_genexpr() -> None:
@@ -1060,7 +1108,27 @@ def test_extract_lambda() -> None:
             print(index, offsets, pos)
 
 
+def test_end_offset_adjust() -> int:
+    cases = [
+        ("yield 1\n", 2),
+        ("yield 1\n\ng    ", 8),
+    ]
+    for case, expected in cases:
+        assert end_offset_adjust(case) == expected
+    try:
+        end_offset_adjust("yield 1")
+        assert False
+    except ValueError:
+        pass
+
+
 def test_extract_function() -> None:
+
+    def test(source: str, offsets: list[tuple[int, int]]) -> None:
+        for offset in extract_function(source):
+            assert offset == offsets.pop(0)
+
+    ## test with functions close to each other and with inner functions ##
     source = """
 print()
 
@@ -1075,21 +1143,84 @@ def t():
             pass
 """
     offsets = [
-        (9, 27),
-        (26, 45),
-        (52, 67),
+        ## first test ##
+        (9, 26),
+        (26, 44),
+        (52, 66),
         (88, None),
         (75, None),
         (66, None),
-        (0, 172),
+        ## second test ##
+        (0, 167),
         (454, None),
+        ## third test ##
+        (0, 82),
+        (82, 95),
+        (101, 130),
+        (131, None),
+        ## fourth test ##
+        (0, 43),
+        (43, 93),
+        (93, 136),
+        (136, None),
     ]
-    for offset in extract_function(source):
-        assert offset == offsets.pop(0)
+    test(source, offsets)
+    ## variety test ##
+    source = """    def test():
+        j = 3
+        f = lambda: j
+        yield f
+        f = (j for i in range(3))
+        yield f
+        f = (f for i in range(3))
+        yield f
 
-    source = '    def test():\n        j = 3\n        f = lambda: j\n        yield f\n        f = (j for i in range(3))\n        yield f\n        f = (f for i in range(3))\n        yield f\n\n    gen = test()\n    assert expr_getsource(next(gen)) == "lambda: j"\n    assert expr_getsource(next(gen)) == "(j for i in range(3))"\n    assert expr_getsource(next(gen)) == "(f for i in range(3))"\n    ## functions ##\n    print("--------------------")\n    print(expr_getsource(test))\n\n\n\ndef test_extract_genexpr() -> None:\n    source = "iter1, iter2 = (i for i in range(3)), (j for j in (i for i in range(5)) if j in (i for i in range(2)) )"\n    pos = [(15, 36), (50, 71), (80, 101), (38, 103)]\n'
-    for offset in extract_function(source):
-        assert offset == offsets.pop(0)
+    gen = test()
+    assert expr_getsource(next(gen)) == "lambda: j"
+    assert expr_getsource(next(gen)) == "(j for i in range(3))"
+    assert expr_getsource(next(gen)) == "(f for i in range(3))"
+    ## functions ##
+    print("--------------------")
+    print(expr_getsource(test))
+
+
+
+def test_extract_genexpr() -> None:
+    source = "iter1, iter2 = (i for i in range(3)), (j for j in (i for i in range(5)) if j in (i for i in range(2)) )"    pos = [(15, 36), (50, 71), (80, 101), (38, 103)]"""
+    test(source, offsets)
+    ## testing gaps, spacing, and single line functions ##
+    source = """
+                def a():
+
+
+
+                    #pass
+                    gen = 3
+def b():pass
+
+
+
+
+
+
+def c(): pass;pass;    pass;
+
+def d():
+    pass;pass
+"""
+    test(source, offsets)
+    ## testing strings ##
+    source = '''
+    def a(): """docstring""""string"; pass
+    def b():
+        """docstring"""
+        pass
+    def a(): ''\'docstring''\''string'; pass
+    def b():
+        ''\'docstring''\'
+        pass
+'''
+    test(source, offsets)
 
 
 def test_except_adjust() -> None:

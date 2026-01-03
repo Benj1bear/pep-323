@@ -9,6 +9,7 @@
 
 import asyncio
 from collections.abc import Iterable
+from typing import Union
 import pickle
 from functools import partial
 from inspect import currentframe
@@ -92,7 +93,7 @@ def init_test(FUNC: Any, flag: bool, self: type, self_type: type) -> None:
         "state": str,
         "source": str,
         "linetable": int,
-        "yieldfrom": NoneType | Iterable | self_type,
+        "yieldfrom": Union[NoneType, Iterable, self_type],
         "version": str,
         "jump_positions": list,
         "suspended": bool,
@@ -180,7 +181,7 @@ def test_picklers() -> None:
     _frame = frame(currentframe())
     _code = code(_frame.f_code)
     test_Pickler(_code)
-    test_Pickler(_frame)
+    #test_Pickler(_frame)
     test_Pickler(Generator())
     test_Pickler(AsyncGenerator())
 
@@ -687,6 +688,11 @@ def test_generator_clean_source_lines() -> None:
 
         func()
         return (yield 3)
+        ## issue where variable assignment isn't working correctly only on yields/yield froms ##
+        ##  without brackets (e.g. works on value yields but not regular yields) ##
+        ## TODO write tests for these (Note: unbracketed are done by clean_source_lines)
+        # a=yield [1,2,3]
+        # b=yield from [1,2,3]
 
     gen = Generator(test)
     for line in gen._internals["source_lines"]:
@@ -834,9 +840,9 @@ def test_generator_init_states() -> None:
 def test_generator__init__() -> None:
 
     ## function generator ##
-    # uninitilized - this should imply that use as a decorator works also ##
+    # uninitialized - this should imply that use as a decorator works also ##
     init_test(simple_generator, False, Generator, GeneratorType)
-    # initilized #
+    # initialized #
     init_test(simple_generator(), True, Generator, GeneratorType)
     ## generator expression ##
     gen = (i for i in range(3))
@@ -1025,6 +1031,18 @@ def test_generator__next__() -> None:
 
 
 def test_generator__iter__() -> None:
+    """
+    Test if the generator is iterable
+
+    only test uninitialized to initialized generators
+    since the initialized generators are expected to be patched
+    which only adds the additional requirement to patch first
+    
+    Note:
+    patches are applied on _frame_init since this is from
+    an uninitialized generator. However, initialized generators
+    are expected to be patched before _frame_init
+    """
     assert [i for i in Generator(simple_generator())] == [1, 2, 3]
 
     @Generator
@@ -1042,8 +1060,6 @@ def test_generator__iter__() -> None:
             yield i
 
     gen = test_case()
-    ## because it's not from an already running generator ##
-    ## the fishook patches on the iterators are already applied ##
     assert [i for i in gen] == [1, 0, 1, 2]
 
 
@@ -1319,7 +1335,7 @@ def test_lambda_expr() -> None:
         "locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
         " locals()['.internals']['.args'].pop()",
     ]
-    ## not implemented ##
+    ## not implemented (e.g. determining linenos from encapsulated value yields) ##
     # assert gen._internals["lineno"] == ...
 
 

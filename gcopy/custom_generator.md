@@ -397,3 +397,6 @@ You should see that I've made a custom ```code``` and ```frame``` class that als
   - on ```BaseGenerator.__init__()``` the locals are still the same pointers in the original frame and thus instantiating a i.e. ```Generator``` or ```AsyncGenerator``` type will create pointers essentially. To avoid this, deepcopy the generator after instantiation.
 
   - f-strings are unpacked. We could check if they need to be unpacked however it's likely about the same or worse than being unpacked without checking.
+
+  - Because bytecode changes with python versions the main functions to look out for in terms of
+  instability should start likely with the functions found in utils.py: code_setup, code_attrs, similar opcode, and code_cmp. Though, code_setup is likely the only and most unstable of them that needs review per version change.

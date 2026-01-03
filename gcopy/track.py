@@ -2,11 +2,12 @@
 ### tracking ###
 ################
 import builtins  # # for consistency (it switches between a module and a dict) ##
+# import itertools, collections # to get the rest of the iterators
 from inspect import currentframe, getframeinfo, getsourcelines
 from types import FrameType, FunctionType
 
 ## imports used for the monkey patching ##
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterable, Iterator, Union
 from gcopy.utils import Wrapper, get_history_item, getcode, is_cli
 
 ## used for python versions prior to PEP 667 in order to update the f_locals properly ##
@@ -24,12 +25,12 @@ def get_indent(line: str) -> int:
     return count
 
 
-def track_iter(obj: Iterator | Iterable, frame: FrameType) -> Iterator | Iterable:
+def track_iter(obj: Union[Iterator, Iterable], frame: FrameType) -> Union[Iterator, Iterable]:
     """
     Tracks an iterator in the local scope initiated by a for loop
 
     This function has a specific use case where the initialization
-    of an iterator via a for loop implictely does not allow for
+    of an iterator via a for loop implicitly does not allow for
     reliable extraction from the garbage collector and thus manually
     assigning the iterator for tracking is used
 
@@ -93,7 +94,7 @@ def track_iter(obj: Iterator | Iterable, frame: FrameType) -> Iterator | Iterabl
     return obj
 
 
-def track_adjust(f_locals: dict) -> bool:
+def track_adjust(f_locals: dict) -> None:
     """
     Adjusts the track_iter created variables
     used in generator expressions from offset
@@ -107,13 +108,8 @@ def track_adjust(f_locals: dict) -> bool:
     Note: only needed on the current variables
     in the frame that use offset based trackers
     """
-    index = 0
-    ## make sure enumerate starts at 0 since we shouldn't consider the first iterator ##
-    ## since this can only be determined manually if it's just by itself ##
-    for index, key in enumerate(f_locals.pop(".mapping", [])):
-        ## index + 1 since we start at 0 ##
-        f_locals[".%s" % ((index + 1) * 4)] = f_locals.pop(".%s" % key)
-    return bool(index)
+    for index, key in enumerate(f_locals.pop(".mapping", []), start=1):
+        f_locals[".%s" % (index * 4)] = f_locals.pop(".%s" % key)
 
 
 def track_shift(FUNC: FunctionType, internals: dict) -> None:
@@ -132,7 +128,7 @@ def track_shift(FUNC: FunctionType, internals: dict) -> None:
 
 
 class track(Wrapper):
-    """Wrapper class to track iterators"""
+    """Wrapper class to track iterators (we need to track iterators so they show up in locals)"""
 
     _expected = ["__iter__", "__next__"]
 
@@ -151,7 +147,7 @@ class track(Wrapper):
 
 
 class atrack(Wrapper):
-    """Wrapper class to track async iterators"""
+    """Wrapper class to track async iterators (we need to track iterators so they show up in locals)"""
 
     _expected = ["__aiter__", "__anext__"]
 
@@ -173,7 +169,7 @@ def wrapper_proxy(FUNC: FunctionType) -> FunctionType:
     e.g. modifies for arg1 in isinstance(arg1, arg2)
     """
 
-    def wrapper(obj, class_or_tuple: type | tuple) -> bool:
+    def wrapper(obj, class_or_tuple: Union[type, tuple]) -> bool:
         if type(class_or_tuple) in (track, atrack):
             class_or_tuple = class_or_tuple.obj
         return FUNC(obj, class_or_tuple)
@@ -181,17 +177,29 @@ def wrapper_proxy(FUNC: FunctionType) -> FunctionType:
     return wrapper
 
 
-def get_builtin_iterators() -> dict:
-    """Gets all the builtin iterators"""
+def get_iterators(*modules: Iterable[Union[type, object]], merge: bool = True) -> dict:
+    """
+    Gets all the attributes that are iterators/iterable objects
+    
+    merge = True; will merge all the iterators into one dictionary without module names
+    """
     dct = {}
-    for name, obj in vars(builtins).items():
-        if isinstance(obj, type) and issubclass(obj, Iterator | Iterable):
-            dct[name] = obj
+    temp = {}
+    for module in modules:
+        for name, obj in vars(module).items():
+            if isinstance(obj, type) and issubclass(obj, Union[Iterator, Iterable]):
+                temp[name] = obj
+        if not merge:
+            dct[module.__name__] = temp
+            temp = {}
+    dct.update(temp)
     return dct
 
 
 ## Note: Can't change syntactical initiations e.g. (,), [], {}, and {...:...} ## include the type checker patches as well ##
-patches = {name: track(obj) for name, obj in get_builtin_iterators().items()} | {FUNC.__name__: wrapper_proxy(FUNC) for FUNC in (isinstance, issubclass)}
+# , itertools, collections, merge=True
+patches = {name: track(obj) for name, obj in get_iterators(builtins).items()}
+patches.update({FUNC.__name__: wrapper_proxy(FUNC) for FUNC in (isinstance, issubclass)})
 
 def patch_iterators(scope: dict = None) -> None:
     """
@@ -219,7 +227,9 @@ def patch_iterators(scope: dict = None) -> None:
         frame = currentframe()
         scope = frame.f_back.f_locals
     elif isinstance(scope, FunctionType):
-        return FunctionType(scope.__code__, scope.__globals__ | patches, scope.__name__, scope.__defaults__, scope.__closure__)
+        temp_globals = scope.__globals__ 
+        temp_globals.update(patches)
+        return FunctionType(scope.__code__, temp_globals, scope.__name__, scope.__defaults__, scope.__closure__)
     if not isinstance(scope, dict):
         raise TypeError("expected type 'dict' but recieved '%s'" % type(scope).__name__)
     scope.update(patches)
@@ -240,3 +250,4 @@ def unpatch_iterators(scope: dict = None) -> None:
         scope.pop(name, None)
     if frame and version_info < (3, 11):
         ctypes.pythonapi.PyFrame_LocalsToFast(ctypes.py_object(frame), ctypes.c_int(1))
+

@@ -141,44 +141,50 @@ Note: the internal variables ```.send, .frame, .self``` will be available during
 
 # TODO
 
-finish testing + review everything
+### Finish writing tests for:
 
-clean_source_lines:
+source_processing:
 
-  to be checked:
-  - indentation of lines from unpacking in clean_source_lines needs checking
-  - test closing up of brackets for both unpack + clean_source_lines
-  - collect lambda needs checking
-  - decorators needs checking
-  - value yields e.g. decorators/functions/ternary
-  - loops
-  - check the lineno from unpacking for initialized generators
-    - check that all unpacked lines are indented where necessary
-      and indentation of future lines must also be considered
-  - lineno for initialized generators needs checking
+  - test_except_catch_adjust (has no tests written)
+  - test closing up of brackets for both unpack + clean_source_lines (recent fixes that used is_item)
+  - test recent fix in is_item at test_is_item (async fix)
+  - unpack + clean_source_lines recent issues + fixes
+
+### Review for testing:
+
+  clean_source_lines:
+  
+- collect_lambda needs checking
+- decorators needs checking
+- value yields e.g. decorators/functions/ternary
+- loops
+- indentation of lines from unpacking in clean_source_lines needs checking
+
+Initialized Generators:
+- check the lineno from unpacking for initialized generators
+  - check that all unpacked lines are indented where necessary
+    and indentation of future lines must also be considered
+- lineno for initialized generators needs checking
 
 check block_adjust
 
 unpack:
 - check the line continuation is adjusting correctly
-  or consider removing char in " \\" case since it's
-  only for formatting
-
-- use look aheads to avoid unnecessary code adjustments
+or consider removing char in " \\" case since it's
+only for formatting
 
 
-Figure out later:
+version specific:
 
-  source_processing:
+- in python 3.14 t-strings were added (treat as f-strings on unpacking)
+- in python 3.12 you can arbitarily do nested f-strings but in earlier versions you cannot (update the nesting checker in the string_collectors)
+- in python 3.14 exceptions don't need brackets
 
-- fix extract_function for expr_getsource tests
-  - then test it in test_source_processing:
-    - test_expr_getsource
-    - test_extract_function
+### Figure out later:
+  - fix and/or add lineno adjust. Then use this for compound statements tracking
+  - try to implement ag_await for AsyncGenerator if possible (then test this)
 
-- examples of how to use ag_await and then cater for it if relevant
-
-utils:
+  utils:
   - test utils.cli_getsource
-- consider determining lineno given encapsulated yield and the send values
-  - test_lambda_expr in test_custom_generator for encapsulated yields
+  - determine the initial lineno given encapsulated yield and the send values for initialized generators
+    - test_lambda_expr in test_custom_generator for encapsulated yields

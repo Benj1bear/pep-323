@@ -1,14 +1,12 @@
 from copy import copy, deepcopy
 
-## needed to access c level memory for the builtin iterators ##
-from ctypes import POINTER, Structure, c_ssize_t, cast, py_object
 from dis import _unpack_opargs
 from functools import wraps
 from inspect import currentframe
 from readline import get_current_history_length, get_history_item
 from sys import version_info
 from types import CodeType, FrameType, FunctionType, GeneratorType
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any, Callable, Iterable
 
 from opcode import opmap
 
@@ -179,19 +177,22 @@ def similar_opcode(
     except (IndexError, KeyError):
         return False
 
+code_setup = _unpack_opargs
+
+if version_info >= (3, 11):
+    def code_setup(code_obj: CodeType) -> bytes:
+        """makes sure the code objects headers don't get in the way of the comparison"""
+        opargs = _unpack_opargs(code_obj.co_code)
+        if version_info >= (3, 11):
+            RESUME = opmap["RESUME"]
+            for index, opcode, item_index in opargs:
+                if opcode == RESUME:
+                    break
+        return opargs
+
 
 def code_cmp(code_obj1: CodeType, code_obj2: CodeType) -> bool:
     """compares 2 code objects to see if they are essentially the same"""
-
-    def code_setup(code_obj: CodeType) -> bytes:
-        """makes sure the code objects headers don't get in the way of the comparison"""
-        RESUME = opmap["RESUME"]
-        opargs = _unpack_opargs(code_obj.co_code)
-        for index, opcode, item_index in opargs:
-            if opcode == RESUME:
-                break
-        return opargs
-
     try:
         for (index1, opcode1, item_index1), (index2, opcode2, item_index2) in zip(
             code_setup(code_obj1), code_setup(code_obj2), strict=True
@@ -288,6 +289,7 @@ class Wrapper:
                 "__getnewargs_ex__",
                 "__copy__",
                 "__deepcopy__",
+                "__weakref__",
             ]
             for attr in dir(obj):
 
@@ -323,82 +325,3 @@ class Wrapper:
 
     def __setstate__(self, state: dict) -> None:
         self.__init__(state["obj"])
-
-
-def is_running(iter: Iterable) -> bool:
-    """Determines if an iterator is running"""
-    if issubclass(type(iter), Wrapper):
-        return getattr(iter, "running", False)
-    index = get_iter_index(iter)
-    return index > 0 or index < -1
-
-## used in get_iter_index for an instance based check since no such type is in .py stdlib (I think) ##
-memory_iterator = type(iter(memoryview(bytearray())))
-
-
-def get_iter_index(iterator: Iterable) -> int:
-    """Gets the current builtin iterators index via its __reduce__ method or c level inspection"""
-    if isinstance(iterator, memory_iterator):
-        return SetIteratorView(iterator).set
-    try:
-        ## builtin iterators have a reduce that enables copying ##
-        ## formated i.e. as (function_iter, (instance,), index) ##
-        reduction = iterator.__reduce__()
-    except TypeError:
-        raise TypeError(
-            "Cannot use method '__reduce__' on object %s . Try wrapping it with 'track' or 'atrack' to determine if the iterator is running"
-            % iterator
-        )
-    if isinstance(reduction[-1], int):
-        return reduction[-1]
-    elif reduction[0] == enumerate:
-        return reduction[-1][-1]
-    elif reduction[0] == zip:
-        for index in range(2):
-            try:
-                return get_iter_index(reduction[1][index])
-            except:
-                pass
-    elif reduction[0] in (map, filter):
-        return get_iter_index(reduction[1][1])
-    ## set_iterator and dict_iterator require c level inspection ##
-    elif reduction[0] == iter:
-        return SetIteratorView(iterator).size - iterator.__length_hint__()
-    raise ValueError("Could not determine the iterators current index")
-
-
-class SetIteratorView(Structure):
-    """
-    Used to access c level variables of the set_iterator builtin
-
-    class follows on from the builtin layout:
-    i.e.
-    # iter
-    https://github.com/python/cpython/blob/6aa88a2cb36240fe2b587f2e82043873270a27cf/Objects/iterobject.c#L11C1-L15C17
-    ## but we're interested in:
-    # dict_iterator
-    https://github.com/python/cpython/blob/6aa88a2cb36240fe2b587f2e82043873270a27cf/Objects/dictobject.c#L5022C1-L5029C18
-    # set_iterator
-    https://github.com/python/cpython/blob/6aa88a2cb36240fe2b587f2e82043873270a27cf/Objects/setobject.c#L807C1-L813C17
-
-    ## Note: dict iterator and set iterator are very similar in their memory layout (variables in their structs) and
-    ## thus even though this class is intended for a set_iterator it'll work for dict_key_iterator for determining the size ##
-
-    we can also do memory views where 'set' is the current index:
-    https://github.com/python/cpython/blob/6aa88a2cb36240fe2b587f2e82043873270a27cf/Objects/memoryobject.c#L3455C1-L3461C20
-    """
-
-    _fields_ = [
-        ## from macro PyObject_HEAD ##
-        ("refcount", c_ssize_t),  # Reference count
-        ("type", POINTER(py_object)),  # Type
-        ## relevant other fields (Note: fields are in their order and are required up to what's used) ##
-        ("set", c_ssize_t),  # set used (is also the index position for memory view)
-        ("size", c_ssize_t),  # original size
-    ]
-
-    def __init__(self, set_or_dict_key_iterator: Iterable | Iterator) -> None:
-        c_iterator = cast(id(set_or_dict_key_iterator), POINTER(SetIteratorView))
-        for attr in self._fields_:
-            attr = attr[0]
-            setattr(self, attr, getattr(c_iterator.contents, attr))

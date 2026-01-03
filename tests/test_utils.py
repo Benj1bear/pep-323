@@ -4,7 +4,6 @@
 import warnings
 from sys import version_info
 from types import CodeType, FrameType
-from typing import Iterator
 
 from gcopy.utils import (
     attr_cmp,
@@ -18,7 +17,6 @@ from gcopy.utils import (
     getframe,
     hasattrs,
     is_cli,
-    is_running,
     similar_opcode,
     skip,
     try_set,
@@ -193,43 +191,3 @@ def test_code_cmp() -> None:
     assert code_cmp(test("lambda: j"), test_case())
     ## different code objects ##
     assert code_cmp(test("lambda x: x"), test("lambda x: x + 1")) == False
-
-
-def test_is_running() -> None:
-    ## without tracking ##
-    def test_case():
-        yield 1
-
-    try:
-        is_running(test_case())
-        assert False
-    except TypeError:
-        pass
-    ## with tracking ##
-    from gcopy.track import track
-
-    iterator = track(test_case())
-    assert is_running(iterator) == False
-    next(iterator)
-    assert is_running(iterator)
-
-    ## iterator with end index ##
-    def test(iterator: Iterator) -> None:
-        iterator = iter(iterator)
-        assert is_running(iterator) == False
-        next(iterator)
-        assert is_running(iterator)
-
-    test(range(3))
-    ## requiring c level memory access ##
-    test(memoryview(bytearray([1, 2, 3])))
-    test({1, 2, 3})
-    test(frozenset({1, 2, 3}))
-    test({"a": 1, "b": 2, "c": 3})
-    ## zip ##
-    test(zip([1, 2, 3], [1, 2, 3]))
-    ## enumerate ##
-    test(enumerate([1, 2, 3]))
-    ## map + filter ##
-    test(map(lambda x: x, [1, 2, 3]))
-    test(filter(lambda x: x, [1, 2, 3]))

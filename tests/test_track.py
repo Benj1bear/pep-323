@@ -1,10 +1,12 @@
 import asyncio
 from collections.abc import Iterable, Iterator
+import builtins
+from typing import Union
 
 from gcopy.track import (
     atrack,
     currentframe,
-    get_builtin_iterators,
+    get_iterators,
     patch_iterators,
     track,
     track_adjust,
@@ -13,7 +15,7 @@ from gcopy.track import (
 )
 
 
-def iter_init(obj: Iterable | Iterator) -> Iterable:
+def iter_init(obj: Union[Iterable, Iterator]) -> Iterable:
     """Initializes iterators (for testing)"""
     if obj.__name__ in ("memoryview",):
         return iter(obj(b"abcedfg"))
@@ -29,7 +31,7 @@ def iter_init(obj: Iterable | Iterator) -> Iterable:
 
 def test_track_adjust() -> None:
     dct = {".mapping": [34, 35, 74], ".34": None, ".35": None, ".74": None}
-    assert track_adjust(dct)
+    assert track_adjust(dct) is None
     assert list(dct.keys()) == [".4", ".8", ".12"]
 
 
@@ -61,7 +63,8 @@ def test_patch_iterators() -> None:
     assert not isinstance(range, track)
     ## globals ##
     patch_iterators(globals())
-    iterators = get_builtin_iterators()
+    # , itertools, collections, merge=True
+    iterators = get_iterators(builtins)
     for name in iterators:
         assert type(globals()[name]) == track
     ## unpatch the iters ##

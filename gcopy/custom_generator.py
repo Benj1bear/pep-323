@@ -7,16 +7,16 @@ from functools import partial
 from inspect import getsource
 from sys import exc_info, version_info
 from textwrap import dedent
-from types import CodeType  # , FrameType ## lineno_adjust
 from types import (
     AsyncGeneratorType,
+    CodeType,
     CellType,
     CoroutineType,
     FrameType,
     FunctionType,
     GeneratorType,
 )
-from typing import Any
+from typing import Any, Union
 
 from gcopy.source_processing import (
     clean_lambda,
@@ -51,7 +51,7 @@ except:
     NoReturn = {"NoReturn"}
 
 
-## minium version supported ##
+## minimum version supported ##
 if version_info < (3, 5):
     raise ImportError("Python version 3.5 or above is required")
 
@@ -251,7 +251,7 @@ class BaseGenerator:
 
     def __init__(
         self,
-        FUNC: FunctionType | GeneratorType | str = None,
+        FUNC: Union[FunctionType, GeneratorType, str] = None,
     ) -> None:
         """
         Takes in a function/generator or its source code as the first argument
@@ -285,9 +285,9 @@ class BaseGenerator:
                         "code": code(getcode(FUNC)),
                         ## 'gi_yieldfrom' was introduced in python version 3.5 and yield from ... in 3.3 ##
                         "yieldfrom": getattr(FUNC, prefix + "yieldfrom", None),
-                        "suspended": True,
-                        "running": False,
-                        "initialized": True,
+                        "suspended": getattr(FUNC, prefix + "suspended", True),
+                        "running": getattr(FUNC, prefix + "running", False),
+                        "initialized": True, # should be removed
                     }
                 )
                 ## setup api if it's currently running ##
@@ -330,11 +330,11 @@ class BaseGenerator:
                     self._internals.update(
                         {
                             "code": code(FUNC.__code__),
-                            "frame": frame(),
+                            "frame": frame(), # shouldn't the frame be made on call??
                             "suspended": False,
                             "yieldfrom": None,
                             "running": False,
-                            "initialized": False,
+                            "initialized": False, # might be removed since should use frame instead
                         }
                     )
                     self.__name__ = FUNC.__code__.co_name
@@ -510,7 +510,9 @@ class BaseGenerator:
         ## be correct in track_iter therefore we compile first to provide a filename then exec ##
         code_obj = compile("\n".join(self.__source__), "<Generator>", "exec")
         ## make sure the globals are there ##
-        exec(code_obj, patches | self._internals["frame"].f_globals, locals())
+        temp_globals = patches
+        temp_globals.update(self._internals["frame"].f_globals)
+        exec(code_obj, temp_globals, locals())
         return len(init), locals()["next_state"]
 
     def _update(self, init_length: int) -> None:
@@ -586,10 +588,10 @@ class BaseGenerator:
         return self.__call__(self, *args, **kwargs)
 
     def __instancecheck__(self, instance: object) -> bool:
-        return isinstance(instance, eval(self._internals["type"]) | type(self))
+        return isinstance(instance, Union[eval(self._internals["type"]), type(self)])
 
     def __subclasscheck__(self, subclass: type) -> bool:
-        return issubclass(subclass, eval(self._internals["type"]) | type(self))
+        return issubclass(subclass, Union[eval(self._internals["type"]), type(self)])
 
     def __getstate__(self, FUNC: FunctionType = Pickler._pickler_get) -> dict:
         """Similar to the __getstate__ method of Pickler but pertaining to self._internals"""

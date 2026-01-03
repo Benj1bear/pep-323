@@ -3,11 +3,11 @@
 #################################################
 
 from functools import partial
-from inspect import currentframe, findsource, getsource, signature
+from inspect import currentframe, findsource, getsource, signature, getgeneratorstate
 from itertools import chain
 from sys import version_info
 from types import CodeType, CellType, FunctionType, GeneratorType# , FrameType ## lineno_adjust
-from typing import Any, Iterable
+from typing import Iterable, Union
 
 ## to ensure gcopy.custom_generator.Generator can be used in exec for sign ##
 from gcopy.track import get_indent, track_adjust
@@ -20,7 +20,6 @@ from gcopy.utils import (
     getcode,
     getframe,
     is_cli,
-    is_running,
     skip,
     try_set,
 )
@@ -212,7 +211,7 @@ def skip_source_definition(source: str) -> str:
 
 def collect_string(
     source_iter: Iterable, index: int, reference: str, source: str = None
-) -> tuple[int, str | list[str], int]:
+) -> tuple[int, Union[str, list[str]], int]:
     """
     Collects strings in an iterable assuming correct
     python syntax and the char before is a qoutation mark
@@ -260,7 +259,7 @@ def collect_string(
 
 def collect_multiline_string(
     source_iter: Iterable, index: int, reference: str, source: str = None
-) -> tuple[int, str | list[str], int]:
+) -> tuple[int, Union[str, list[str]], int]:
     """
     Collects multiline strings in an iterable assuming
     correct python syntax and the char before is a
@@ -355,7 +354,7 @@ def string_collector_proxy(
     return line, prev, fixed_lines
 
 
-def inverse_bracket(bracket: str) -> str | None:
+def inverse_bracket(bracket: str) -> Union[str, None]:
     """Gets the inverse of the current bracket"""
     ## use .get(..., None) since char == '' is possible ##
     return {
@@ -416,9 +415,24 @@ def named_adjust(
 
 
 def unpack_adjust(line: str) -> list[str]:
-    """adjusts the unpacked line for usage and value yields"""
+    """
+    adjusts the unpacked line for usage and value yields
+    
+    Note:
+    make sure to run .strip() on the line first
+    """
     if line.startswith("yield ") or line.startswith("yield)") or line == "yield":
         return yield_adjust(line, "") + ["locals()['.internals']['.args'] += [locals()['.internals']['.send']]"]
+    ## adjust to clean up the brackets ##
+    if not is_item(line):
+        end_char = line[-1:]
+        if end_char in "}])":
+            char = line[0:1]
+            if char.isalnum() or (char in "([{" and inverse_bracket(char) != end_char):
+                for char in line[::-1]:
+                    if char != end_char:
+                        break
+                    line = line[:-1]
     return ["locals()['.internals']['.args'] += [%s]" % line]
 
 
@@ -430,7 +444,7 @@ def update_lines(
     lines: list[str],
     final_line: str,
     named: bool = False,
-    unwrap: Iterable | None = None,
+    unwrap: Union[Iterable, None] = None,
     bracket_index: int = None,
     operator: str = "",
     yielding: bool = False,
@@ -477,10 +491,22 @@ def update_lines(
                 final_line += line
             ## expression ##
             else:
+                update = "locals()['.internals']['.args'].pop(0)"
+                line = line.strip()
+                if not is_item(line):
+                    if line[0] in "({[": 
+                        ## make sure the updating line has the bracket ##
+                        update = line[0] + update
+                        line = line[1:]
+                    elif line[-1] in ")}]":
+                        ## make sure the updating line has the bracket ##
+                        update = update + line[-1]
+                        line = line[:-1]
+                    #  bracket_adjusted = True
                 ## unpacking should pop from the start (since the line is in this order) ##
-                final_line += "locals()['.internals']['.args'].pop(0)"
+                final_line += update
                 try_set(depths.get(depth_total, None), -1, len(lines))
-                lines += unpack_adjust(line.strip())
+                lines += unpack_adjust(line)
             line = ""
     if operator:
         final_line += " " + operator
@@ -502,7 +528,16 @@ def is_item(source: str) -> bool:
     try:
         compile("def temp():" + source, "", "exec")
         return True
-    except SyntaxError:
+    except SyntaxError as e:
+        # i.e. 
+        # async def example():
+        #     return (await 0)
+        if "'await'" in e.msg:
+            try:
+                compile("async def temp():" + source, "", "exec")
+                return True
+            except SyntaxError:
+                return False
         return False
 
 
@@ -663,7 +698,7 @@ def unpack(
                 depth_total -= 1
                 if unwrapping and depth_total < 0 or char != inverse_bracket(depths.get(depth_total, (0, ""))[1]):
                     if not in_ternary_else:
-                        line += char
+                        line += char ## this is the bracket error likely
                     # print(unwrapping , depth_total < 0 , char != inverse_bracket(depths.get(depth_total, (0, ""))[1]))
                     if depth_total < 0:
                         break
@@ -723,7 +758,7 @@ def unpack(
     return lines, final_line, end_index, fixed_lines
 
 
-def get_unpacked_lines(lines: str, reference: int | None) -> list[str]:
+def get_unpacked_lines(lines: str, reference: Union[int, None]) -> list[str]:
     """gets any lines that have been unpacked part of the ternary expression"""
     if reference == 0:
         return [], lines
@@ -1490,62 +1525,98 @@ def extract_source_from_comparison(
     globals: dict = None,
     locals: dict = None,
     mode: str = "eval",
+    strictness: int = 1,
 ) -> str:
     """
     Extracts source via a comparison of
     extracted source codes code object
     and the current code object
+
+    mode: 
+        "eval" or "exec" is generally for expression or functions respectively
+    strictness:
+        should be a positive integer determining how strict the code comparison 
+        needs to be in order to pass i.e. higher number means more strict/precise
+        source code.
+
+        Currently the highest level of strictness is 2
+
+        If strictness is set to a number greater the highest current strictness
+        or a negative value no source code will be compared, and if the strictness
+        is set to 0 then it's the first source code extraction to make it to the 
+        comparison that will pass.
     """
-    attrs = (
-        "co_freevars",
-        "co_cellvars",
-        "co_nlocals",
-        "co_stacksize",
-        "co_code",
-        "co_consts",
-        "co_names",
-        "co_varnames",
-        "co_name",
-    )
-    executor = eval
-    if mode == "exec":
+    if type(strictness) != int or strictness < 1:
+        raise ValueError("strictness must be a positive integer")
+    if strictness < 3:
+        if strictness == 0:
+            import warnings
+            warnings.warn("strictness 0 Is not recommended (see docstring)", category=UserWarning)
+        attrs = (
+            "co_freevars",
+            "co_cellvars",
+            "co_nlocals",
+            "co_stacksize",
+            "co_code",
+            "co_consts",
+            "co_names",
+            "co_varnames",
+            "co_name",
+        )
+        executor = eval
+        if mode == "exec":
 
-        def exec_proxy(name: str, source: str, globals: dict, locals: dict):
-            exec(source, globals, locals)
-            return currentframe().f_locals.get(name, None)
+            def exec_proxy(name: str, source: str, globals: dict, locals: dict):
+                exec(source, globals, locals)
+                temp_locals = currentframe().f_locals
+                ## if it's not in current frame then it's allocated in locals ##
+                return temp_locals.get(name, locals.get(name, None))
 
-        executor = partial(exec_proxy, code_obj.co_name)
-    if isinstance(source, list):
-        source = "".join(source)
-    extracing_genexpr = getcode(extractor).co_name == "extract_genexpr"
-    for col_offset, end_col_offset in extractor(source):
-        try:  ## we need to make it a try-except in case of potential syntax errors towards the end of the line/s ##
-            ## eval should be safe here assuming we have correctly extracted the expression - we can't use compile because it gives a different result ##
-            temp_source = source[col_offset:end_col_offset]
-            temp_code = compile(temp_source, "<Don't track>", mode) ## very important, because track_iter otherwise will interfere with the comparison ##
-            try:
-                genexpr = executor(temp_code, globals, locals)
-            except NameError as e:
-                if not extracing_genexpr:
-                    raise e
-                ## NameError since genexpr's first iterator is stored as .0 ##
-                name = e.args[0].split("'")[1]
-                genexpr = executor(temp_code, globals, locals | {name: locals[".0"]})
-            try:
-                temp_code = getcode(genexpr)
-                if temp_code.co_name != code_obj.co_name:
+            executor = partial(exec_proxy, code_obj.co_name)
+        if isinstance(source, list):
+            source = "".join(source)
+        extracing_genexpr = getcode(extractor).co_name == "extract_genexpr"
+        for col_offset, end_col_offset in extractor(source):
+            try:  ## we need to make it a try-except in case of potential syntax errors towards the end of the line/s ##
+                ## eval should be safe here assuming we have correctly extracted the expression - we can't use compile because it gives a different result ##
+                temp_source = source[col_offset:end_col_offset]
+                ## trim off leading newlines ##
+                while temp_source[0] == "\n":
+                    temp_source = temp_source[1:]
+                indent = get_indent(temp_source)
+                ## make sure to the source is not indented (otherwise comparison will fail) ##
+                if indent:
+                    lines = [line for line in temp_source.split("\n") if not line.isspace()]
+                    temp_source = "\n".join(indent_lines(lines, -indent))
+                # print(repr(temp_source))
+                # print("---------------------------------")
+                temp_code = compile(temp_source, "<Don't track>", mode) ## very important, because track_iter otherwise will interfere with the comparison ##
+                try:
+                    generator = executor(temp_code, globals, locals)
+                except NameError as e:
+                    if not extracing_genexpr:
+                        raise e
+                    ## NameError since genexpr's first iterator is stored as .0 ##
+                    name = e.args[0].split("'")[1]
+                    temp_locals = locals 
+                    temp_locals.update({name: locals[".0"]})
+                    generator = executor(temp_code, globals, temp_locals)
+                try:
+                    temp_code = getcode(generator)
+                    if temp_code.co_name != code_obj.co_name:
+                        continue
+                except AttributeError:
                     continue
-            except AttributeError:
-                continue
-            ## attr_cmp should get most simple cases, code_cmp should cover nonlocal + closures ideally ##
-            if attr_cmp(temp_code, code_obj, attrs) or code_cmp(temp_code, code_obj):
-                return temp_source
-        except SyntaxError:
-            pass
+                ## attr_cmp should get most simple cases, code_cmp should cover nonlocal + closures ideally ##
+                ## Note: the comparison should be as strict or better than the strictness ##
+                if attr_cmp(temp_code, code_obj, attrs) + code_cmp(temp_code, code_obj) >= strictness:
+                    return temp_source
+            except SyntaxError as e:
+                pass
     raise Exception("No matches to the original source code found")
 
 
-def expr_getsource(FUNC: Any) -> str:
+def expr_getsource(FUNC: Union[FunctionType, GeneratorType]) -> str:
     """
     Uses the source code extracting expressions until a
     match is found on a code object basis to get the source
@@ -1596,11 +1667,14 @@ def expr_getsource(FUNC: Any) -> str:
             lineno = code_obj.co_firstlineno - 1
             source = findsource(code_obj)[0][lineno:]
         extractor = extract_function
+        ## get the globals and locals whether it's initialized or not ##
         if isinstance(FUNC, FunctionType):
             globals = FUNC.__globals__
             locals = get_nonlocals(FUNC)
         else:
             frame = getframe(FUNC)
+            ## Note: since the frame is not initialized yet we can't get the locals ##
+            ## but nonlocals are locals so we can get these ##
             globals = frame.f_globals
             locals = frame.f_locals
         mode = "exec"
@@ -1613,7 +1687,7 @@ def extract_genexpr(
     source: str,
     recursion: bool = False,
     depths: dict = {},
-    genexpr_depth: int | None = None,
+    genexpr_depth: Union[int, None] = None,
 ) -> GeneratorType:
     """Extracts each generator expression from a list of the source code lines"""
     ID, depth, prev = (
@@ -1747,6 +1821,12 @@ def extract_as(line: str) -> tuple[str, str]:
 
 
 def except_catch_adjust(line: str, lines: list[str]) -> list[str]:
+    """
+    adjusts the lines for the except statement
+    
+    Expects:
+    line = except ... : ...
+    """
     indent = get_indent(line)
     ## length of except is 6, -1 to remove the end colon ##
     line = line[indent + 6 : -1]
@@ -1824,7 +1904,7 @@ def unpack_lambda(source: str) -> list[str]:
     raise SyntaxError("Unexpected format encountered")
 
 
-def get_signature(line: str, args: bool = False) -> str | tuple[str, str]:
+def get_signature(line: str, args: bool = False) -> Union[str, tuple[str, str]]:
     """Returns the function signature and its arguments if desired"""
     ID, has_definition, has_args = "", False, False
     for index, char in enumerate(line):
@@ -1853,7 +1933,11 @@ def collect_lambda(
     prev: tuple[int, int, str],
     index: int,
 ) -> tuple[str, str]:
-    """Collects a lambda function into a single line"""
+    """
+    Collects a lambda function into a single line
+    
+    Expects line to be 'lambda ...'
+    """
     depth, in_definition = 0, False
     lines, line, index, fixed_lines = unpack(line, source_iter, source, index=index, signature=True)
     char = source[index]
@@ -2193,6 +2277,10 @@ def string_collector_adjust(self: object) -> None:
 
 
 def add_fixed_lines(self: object, fixed_lines: int) -> None:
+    """
+    Adjusts the lineno in the linetable for lines that have expanded to 
+    multiple lines long that represent the same line
+    """
     if fixed_lines:
         self.linetable += [self.lineno] * fixed_lines
 
@@ -2223,6 +2311,10 @@ def clean_source_lines(gen: object, running: bool = False) -> None:
                     it records a tuple of (reference_indent,jump_position_index)
     stack_adjuster: adjusts the lines with new lines from unpacking a while loop condition
     fixed_lineno: the lineno of the current line fixed at the first line of unpacking
+
+    
+    Additional info for future reference:
+    string_collector_adjust and source_ID_adjust are the two gateways to unpack and unpack yield
     """
     ## create a mutable instance ##
     self = type("", tuple(), {})()
@@ -2320,7 +2412,7 @@ def clean_source_lines(gen: object, running: bool = False) -> None:
             self.assigned = False
         else:
             self.line += self.char
-            ## detect value yields [yield] and {yield} is not possible only (yield) ##
+            ## detect value yields: [yield] and {yield} is not possible only (yield) ##
             self.depth = update_depth(self.depth, self.char)
             ## '... = yield ...' and '... = yield from ...'
             if not self.assigned and self.char == "=":
@@ -2350,17 +2442,24 @@ def clean_source_lines(gen: object, running: bool = False) -> None:
 
 
 def source_update_ID(
-    self: GeneratorType,
+    self: object,
     next_char: str,
     running: bool,
 ) -> None:
-    """Handles ID in clean_source_lines to collect lambdas, value yields, and ternary expressions"""
-    ## in case of ... ... (otherwise you keep appending the ID) ##
-    if self.space + 1 == self.index:
+    """
+    Handles ID in clean_source_lines to collect lambdas, value yields, and ternary expressions
+
+    This is to lexically collect lambdas, value yields, and ternary expressions through identification
+
+    This function is one of the gateways to the use of the unpack and unpack_yield functions
+    """
+    ## in case of ... ... (otherwise you keep appending the ID) e.g. new ID ##
+    if self.space + 1 == self.index:        
         self.ID = ""
     self.ID += self.char
+    # lambda expression #
     if self.ID == "lambda" and next_char in " :\\":
-        ([], "lambda x: x", 0, "x")
+        # ([], "lambda x: x", 0, "x")
         temp = collect_lambda(self.line, self.source_iter, self.source, self.prev)
         self.lines += temp[0]
         self.line += temp[1]
@@ -2370,13 +2469,17 @@ def source_update_ID(
         setup_next_line(self, self.char, self.indentation)
         self.lineno += 1
         self.ID = ""
+    # send value yield e.g. ... = (yield ...) or ... = (yield from ...)
+    # and send yields e.g. ... = yield ... or ... = yield from ...
     elif self.ID == "yield" and next_char in " )]}\n;\\":
         self.ID = ""
+        ## send value yields ##
         if self.depth:
             self.depth = 0
             unpack_yield(self, running, self.line)
+        ## send yields ##
         else:
-            ## you can have yield from as a value yield ##
+            ## you can have yield from as a send yield ##
             self.index += 1
             yield_from = self.source[self.index:].lstrip().startswith("from ")
             if yield_from:
@@ -2386,9 +2489,10 @@ def source_update_ID(
                         self.ID += self.char
                     elif self.ID:
                         break
-            self.line = self.line[:-6]
+            ## -5 for 'yield' relative to the line collected prior ##
+            self.line = self.line[:-5]
             unpack_yield(self, running, yield_from=yield_from)
-    ## ternary statement ##
+    ## ternary statement e.g. ... if ... else ... ##
     elif self.ID == "if" and next_char in " \\" and self.line[:-2].lstrip():
         ## _ would be self.index, however, we don't need it on this iteration ##
         new_lines, final_line, _, fixed_lines = unpack(
@@ -2398,8 +2502,16 @@ def source_update_ID(
         self.block_adjust(self, new_lines, final_line)
 
 
-def unpack_yield(self, running: bool, line: str|None = None, yield_from: bool = False) -> None:
-    """proxy to unpack value yields"""
+def unpack_yield(self, running: bool, line: Union[str, None] = None, yield_from: bool = False) -> None:
+    """
+    proxy to unpack value yields
+
+    parameter 'line' is needed incase self.line changes
+    
+    Note:
+    This function will append the lines to self.lines and therefore
+    does some of the adjustments done by ...
+    """
     indents = get_indent(self.line)
     new_lines, final_line, self.index, fixed_lines = unpack(
         line, self.source_iter, self.source, index=self.index
@@ -2411,6 +2523,8 @@ def unpack_yield(self, running: bool, line: str|None = None, yield_from: bool = 
             head += " from "
         new_lines += yield_adjust(head + final_line, "")
         final_line = self.line + "locals()['.internals']['.send']"
+    elif line.lstrip().startswith("yield "):
+        final_line = "return " + final_line.lstrip()
     final_line = " " * indents + final_line.lstrip()
     if self.line[indents:].startswith("elif "):
         self.indent_adjust = 4
@@ -2418,7 +2532,7 @@ def unpack_yield(self, running: bool, line: str|None = None, yield_from: bool = 
     block_adjust(self, self.lines, new_lines, final_line)
     if running:
         self.linetable += [self.lineno] * (len(self.lines) - length_before)
-
+    ## def ... ##
     if is_definition(final_line[get_indent(final_line) :]):
         setup_next_line(self)
     else:
@@ -2471,11 +2585,18 @@ def genexpr_adjust(self: GeneratorType, source: str) -> None:
     if ".internals" not in self._locals():
         ## the internally set iterator ##
         self._locals()[".internals"] = {".4": first_iter}
-    ## change the offsets into indents ##
-    if track_adjust(self._locals()[".internals"]) or is_running(self._locals()[".internals"][".4"]):
-        self._internals["lineno"] = length
-    else:
+    ## change the offsets into indents + check if it's running ##
+    
+    ## we know a generator expression is running if it has more than one variable.
+    ## Its for loop cannot exist without at least one more variable present than '.0' 
+    ## , however, it is possible to nonlocally override this so cannot use this approach
+    ## and instead use inspect.getgeneratorstate
+
+    track_adjust(self._locals()[".internals"])
+    if getgeneratorstate(self) == "GEN_CREATED":
         self._internals["lineno"] = 1
+    else:
+        self._internals["lineno"] = length
 
 
 def check_expression(source: str) -> str:
@@ -2519,25 +2640,54 @@ def check_expression(source: str) -> str:
 ### when is it def
 ### when does indentation get reduced
 
+def end_offset_adjust(source: str) -> int:
+    """
+    In extract function to be inclusive of 
+    lines that are not indented and are 
+    empty space we must trim the offset
+    by a number of characters
+    """
+    ## we shouldn't encounter and end block because this
+    ## is already handled at the end of extract_function
+
+    # needed to trim the current line after the function body #
+    new_line = False
+    for index, char in enumerate(source[::-1]):
+        if char != "\n":
+            if new_line:
+                return index + 1
+        else:
+            new_line = True
+    raise ValueError("could not find end offset from an unexpected source code format")
+
 
 def extract_function(source_code: str) -> GeneratorType:
     """Extracts each function and its offset from the source code"""
-    ID, indent, prev, indented, offsets, reference_indent = (
+    ID, indent, prev, indented, offsets, reference_indent, line_index, depth, past_def, past_signature = (
         "",
         0,
         (0, 0, ""),
         False,
         [],
         [],
+        0,
+        0,
+        False,
+        False,
     )
     source_iter = enumerate(source_code)
     for index, char in source_iter:
         if not indented:
             if char == " ":
                 indent += 1
-            else:
+            elif index - (indent + 1) != line_index:
+                if reference_indent and indent <= reference_indent[-1]:
+                    past_signature = False
                 while reference_indent and indent <= reference_indent[-1]:
-                    yield offsets.pop(), index + reference_indent.pop()
+                    ## remove the reference indent then yield and continue ##
+                    reference_indent.pop()
+                    offset = offsets.pop()
+                    yield offset, index - end_offset_adjust(source_code[offset:index - 1])
                 indented = True
         ## skip all strings (we only want the offsets) ##
         if char == "'" or char == '"':
@@ -2545,18 +2695,42 @@ def extract_function(source_code: str) -> GeneratorType:
         elif char == "\\":
             skip_line_continuation(source_iter, source_code, index)
         elif char == "\n":
+            ## compound definition finished ##
+            if past_signature and past_signature[0]:
+                past_signature[0] = False # only allowed to check once
+                line = source_code[past_signature[1] + 1:index]
+                # print(line)
+                if line and not line.isspace():
+                    ## remove the reference indent then yield and continue ##
+                    reference_indent.pop()
+                    yield offsets.pop(), index
+                    indented = True
+                    past_signature = False
+                
+            line_index = index
             ID, indent, indented = "", 0, False
             continue
-        if char.isalnum():
+        elif char.isalnum():
             ID += char
         else:
+            ## we're in a function definition ##
             if ID == "def" and char == " ":
+                past_def = True
                 temp = index - 4 - indent
                 if temp == -1:
                     temp = 0
                 offsets += [temp]
                 reference_indent += [indent]
             ID = ""
+            ## to detect and locate end of function signature ##
+            if past_def and not past_signature:
+                if char in "({[":
+                    depth += 1
+                elif char in ")}]":
+                    depth -= 1
+                elif depth == 0 and char == ":":
+                    past_signature = [True, index]
+                    past_def = False
 
     while offsets:
         yield offsets.pop(), None
