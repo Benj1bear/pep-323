@@ -20,6 +20,7 @@ from gcopy.utils import (
     similar_opcode,
     skip,
     try_set,
+    catch_errors
 )
 
 
@@ -191,3 +192,21 @@ def test_code_cmp() -> None:
     assert code_cmp(test("lambda: j"), test_case())
     ## different code objects ##
     assert code_cmp(test("lambda x: x"), test("lambda x: x + 1")) == False
+
+def test_catch_errors() -> None:
+    from sys import exc_info
+
+    if version_info >= (3, 11):
+        ## ExceptionGroup ##
+        try:
+            raise ExceptionGroup('', (AssertionError(), TypeError(), ValueError()))
+        except:
+            exc = exc_info()[1]
+            assert catch_errors(exc, AssertionError, TypeError, ValueError)
+            assert catch_errors(exc, AssertionError, TypeError, OSError) == False
+    ## single Exception ##
+    try:
+        raise TypeError()
+    except (AssertionError, TypeError, ValueError):
+        exc = exc_info()[1]
+        assert catch_errors(exc, AssertionError, TypeError, ValueError)

@@ -325,3 +325,21 @@ class Wrapper:
 
     def __setstate__(self, state: dict) -> None:
         self.__init__(state["obj"])
+
+
+if version_info < (3,11):
+    ## it shouldn't matter what this is set to as long as it doesn't have .exceptions attribute ##
+    ExceptionGroup = None
+
+
+def catch_errors(error: BaseException, *filter: tuple[BaseException]) -> bool:
+    """
+    checks if an error is in filter
+
+    If the error is an ExceptionGroup all exceptions must be in filter to be caught
+    otherwise any exceptions that are in filter they will be caught
+    """
+    if hasattr(error, "exceptions") and ExceptionGroup not in filter:
+        ## all of error must be in filter ##
+        return all(any(isinstance(exception, subgroup) for subgroup in filter) for exception in error.exceptions)
+    return any(isinstance(error, exception) for exception in filter)

@@ -1236,10 +1236,10 @@ def test_except_adjust() -> None:
     try:
         pass
     except:
-        locals()['.internals']['.error'] = locals()['.internals']['.exc_info']()[1]
+        locals()['.internals']['.error'] = locals()['.internals']['exc_info']()[1]
     return value
     locals()['.internals']['.args'] += [locals()['.internals']['.send']]
-    if isinstance(locals()['.internals']['.error'],  locals()['.internals']['.args'].pop()):
+    if locals()['.internals']['.catch_errors'](locals()['.internals']['.error'], locals()['.internals']['.args'].pop()):
         locals()['.continue_error'] = False"""
     assert "\n".join(result[0]) == answer
     assert result[1] == 0

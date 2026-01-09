@@ -519,10 +519,14 @@ def is_item(source: str) -> bool:
 
     Note: we need to place the source inside
     a function in case of i.e. 'yield'
+
+    Note:
+    for an item to be considered a valid item
+    it must be removed from a statement
     """
     ## remove any key words it starts with ##
     source = source.lstrip()
-    for keyword in ("return ", "yield ", "await ", "if ", "elif ", "while "):
+    for keyword in ("return ", "yield ", "from ", "await ", "if ", "elif ", "while ", "except "):
         if source.startswith(keyword):
             source = source[len(keyword) :].lstrip()
     try:
@@ -1785,17 +1789,14 @@ def except_adjust(current_lines: list[str], exception_lines: list[str], final_li
             break
     number_of_indents = reference_indent + 8
     current_indent = " " * number_of_indents
-    # print(current_lines, exception_lines)
     return (
-        # [" " * reference_indent + "try:"]
         current_lines[:-index]
         + [" " * reference_indent + "try:"]
         + current_lines[-index:]
         + [
             current_indent[:-4] + "except:",
-            current_indent + "locals()['.internals']['.error'] = locals()['.internals']['.exc_info']()[1]",
+            current_indent + "locals()['.internals']['.error'] = locals()['.internals']['exc_info']()[1]",
         ]
-        # + indent_lines(exception_lines, number_of_indents)
         + except_catch_adjust(final_line, exception_lines)
     ), reference_indent
 
@@ -1829,7 +1830,10 @@ def except_catch_adjust(line: str, lines: list[str]) -> list[str]:
     """
     indent = get_indent(line)
     ## length of except is 6, -1 to remove the end colon ##
-    line = line[indent + 6 : -1]
+    line = line[indent + 6 : -1].lstrip()
+    ## Exception groups ##
+    if line[0] == "*":
+        line = line[1:].lstrip()
     ## extract the 'as' keyword position ##
     line, as_keyword = extract_as(line)
     if as_keyword:
@@ -1839,10 +1843,8 @@ def except_catch_adjust(line: str, lines: list[str]) -> list[str]:
     return (
         indent_lines(lines, indent + 4)
         + [
-            " " * (indent + 4) + "if isinstance(locals()['.internals']['.error'], " + line + "):",
+            " " * (indent + 4) + "if locals()['.internals']['.catch_errors'](locals()['.internals']['.error'], " + line + "):",
             " " * (indent + 8) + "locals()['.continue_error'] = False",
-            # " " * (indent + 4) + "else:",
-            # " " * (indent + 8),
         ]
         + as_keyword
     )
@@ -2078,6 +2080,7 @@ def append_line(
     if self.char == ":":
         self.indentation = get_indent(self.line) + 4  # in case of ';'
         self.line += self.char
+    ## appending the line to the list of lines ##
     if self.line and not self.line.isspace():  ## empty lines are possible ##
         reference_indent = get_indent(self.line)
         ## make sure the line is corrected if it currently assumes indentation when it shouldn't ##
@@ -2106,7 +2109,7 @@ def append_line(
             temp_line = custom_adjustment(self, self.line, reference_indent)
             ## for multiple except catches ##
             if self.catch:
-                ## end of except catches ##
+                ## end of except catches without finally ##
                 if reference_indent < self.catch[1]:
                     self.lines += [" " * (4 * self.catch[0] + self.catch[1]) + "else:"]
                     self.lines += indent_lines(
@@ -2118,6 +2121,7 @@ def append_line(
                     )
                     self.lines += indent_lines(["finally:", "    pass"], self.catch[1])
                     self.catch = []
+                ## beginning and ending sections ##
                 elif reference_indent == self.catch[1]:
                     temp = temp_line[0].lstrip()
                     flag = temp.startswith("except:") or temp.startswith("except ")
@@ -2135,10 +2139,13 @@ def append_line(
                             ],
                             self.catch[1] + (4 * (self.catch[0] + 1)),
                         )
-                        if not temp.startswith("finally:") or temp.startswith("finally "):
+                        if (
+                            (not temp.startswith("finally:") or temp.startswith("finally ")) and 
+                            (not temp.startswith("else:") or temp.startswith("else "))
+                            ):
                             self.lines += indent_lines(["finally:", "    pass"], self.catch[1])
                         self.catch = []
-                else:
+                elif get_indent(temp_line[0]) - self.catch[1] == 4:
                     temp_line = indent_lines(temp_line, 4 * self.catch[0])
             self.lines += temp_line
         setup_next_line(self, self.char, self.indentation)
@@ -2228,7 +2235,7 @@ def block_adjust(
             + [final_line]
         )
         return
-    elif check("except"):
+    elif check("except") or check("except*"):
         ## if it's already excepting ##
         if self.catch:
             self.lines += [" " * (4 * self.catch[0] + self.catch[1]) + "else:"]
@@ -2390,8 +2397,11 @@ def clean_source_lines(gen: object, running: bool = False) -> None:
                 self.space = self.index
         ## create new line ##
         elif self.char in "#\n;" or (self.char == ":" and self.source[self.index + 1 : self.index + 2] != "="):
+            ## we can clear the ID since a newline is effectively like a space
             self.ID = ""
-            if running and self.char == "\n" and (self.depth or self.fixed_lineno is not None):
+            # print(repr(self.line), running, repr(self.char), self.depth, self.fixed_lineno)
+            # running and 
+            if self.char == "\n" and (self.depth or self.fixed_lineno is not None):
                 ## adjusts the linetable for closing opened brackets ##
                 if self.fixed_lineno is None:
                     self.lineno += 1
@@ -2399,17 +2409,16 @@ def clean_source_lines(gen: object, running: bool = False) -> None:
                     self.lines += [""]
                 self.linetable += [self.fixed_lineno]
                 ## append the current line ##
-                self.lines[-1] += self.line
-                self.line = ""
+                # self.lines[-1] += self.line
+                # self.line = ""
                 if self.depth == 0:
                     self.fixed_lineno = None
-                    ## append the current line ##
-                    setup_next_line(self, self.char, self.indentation)
+                    # setup_next_line(self, self.char, self.indentation)
             else:
                 self.fixed_lineno = None
                 append_line(self, running)
                 self.depth = 0
-            self.assigned = False
+                self.assigned = False
         else:
             self.line += self.char
             ## detect value yields: [yield] and {yield} is not possible only (yield) ##
@@ -2475,8 +2484,16 @@ def source_update_ID(
         self.ID = ""
         ## send value yields ##
         if self.depth:
+            ## expects i.e. '(yield'
+            prev_line = self.line[:-6]
+            self.line = self.line[-6:]
+            ## for ' yield' case ##
+            if self.line[0] == " ":
+                prev_line = prev_line.rstrip()
+                self.line = prev_line[-1] + self.line[1:]
+                prev_line = prev_line[:-1]
             self.depth = 0
-            unpack_yield(self, running, self.line)
+            unpack_yield(self, running, self.line, prev_line=prev_line)
         ## send yields ##
         else:
             ## you can have yield from as a send yield ##
@@ -2502,7 +2519,7 @@ def source_update_ID(
         self.block_adjust(self, new_lines, final_line)
 
 
-def unpack_yield(self, running: bool, line: Union[str, None] = None, yield_from: bool = False) -> None:
+def unpack_yield(self, running: bool, line: Union[str, None] = None, yield_from: bool = False, prev_line: Union[str, None] = None) -> None:
     """
     proxy to unpack value yields
 
@@ -2512,7 +2529,6 @@ def unpack_yield(self, running: bool, line: Union[str, None] = None, yield_from:
     This function will append the lines to self.lines and therefore
     does some of the adjustments done by ...
     """
-    indents = get_indent(self.line)
     new_lines, final_line, self.index, fixed_lines = unpack(
         line, self.source_iter, self.source, index=self.index
     )
@@ -2525,11 +2541,14 @@ def unpack_yield(self, running: bool, line: Union[str, None] = None, yield_from:
         final_line = self.line + "locals()['.internals']['.send']"
     elif line.lstrip().startswith("yield "):
         final_line = "return " + final_line.lstrip()
-    final_line = " " * indents + final_line.lstrip()
-    if self.line[indents:].startswith("elif "):
-        self.indent_adjust = 4
+    ## add the previous line ##
+    if prev_line:
+        final_line = prev_line + final_line.lstrip()
+    else:
+        final_line = " " * get_indent(self.line) + final_line.lstrip()
     length_before = len(self.lines)
     block_adjust(self, self.lines, new_lines, final_line)
+    ## update the linetable and setup the next line ##
     if running:
         self.linetable += [self.lineno] * (len(self.lines) - length_before)
     ## def ... ##
@@ -2538,12 +2557,12 @@ def unpack_yield(self, running: bool, line: Union[str, None] = None, yield_from:
     else:
         self.indentation = get_indent(self.lines[-1]) + self.indent_adjust
         setup_next_line(self, self.source[self.index], self.indentation)
-    if self.indent_adjust:
-        self.line = " " * self.indentation
     ## setup the variables for the next line ##
-    self.assigned = False    
+    self.assigned = False
     ## important to ensure the indentation is correct ##
     self.space = self.index
+    ## important: leave this line at the end since we're using self.lines above ##
+    self.line = self.lines.pop()
 
 
 def clean_lambda(self: GeneratorType, FUNC: FunctionType) -> None:
@@ -2734,3 +2753,4 @@ def extract_function(source_code: str) -> GeneratorType:
 
     while offsets:
         yield offsets.pop(), None
+

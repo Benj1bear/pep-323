@@ -1,11 +1,16 @@
 ##################################
 ### picklable/copyable objects ###
 ##################################
+from sys import exc_info, version_info
+## minimum version supported ##
+if version_info < (3, 5):
+    raise ImportError("Python version 3.5 or above is required")
+
 from copy import copy, deepcopy
 
 from functools import partial
 from inspect import getsource
-from sys import exc_info, version_info
+
 from textwrap import dedent
 from types import (
     AsyncGeneratorType,
@@ -41,19 +46,16 @@ from gcopy.utils import (
     get_nonlocals,
     getcode,
     getframe,
-    hasattrs
+    hasattrs,
+    catch_errors
 )
+
 
 try:
     from typing import NoReturn
 except:
     ## for 3.5 since 3.6.2; there might be alternatives that are better than this for 3.5 ##
     NoReturn = {"NoReturn"}
-
-
-## minimum version supported ##
-if version_info < (3, 5):
-    raise ImportError("Python version 3.5 or above is required")
 
 
 class Pickler:
@@ -372,6 +374,7 @@ class BaseGenerator:
                 "partial": partial,
                 ".args": [],
                 ".send": None,
+                'catch_errors': catch_errors,
             }
             if ".internals" not in f_locals:
                 f_locals[".internals"] = internals

@@ -26,7 +26,7 @@ from gcopy.custom_generator import (
     Generator,
     Pickler,
     code,
-    frame,
+    frame
 )
 from gcopy.source_processing import (
     append_line,
@@ -38,7 +38,7 @@ from gcopy.source_processing import (
     update_jump_positions,
 )
 from gcopy.track import atrack, patch_iterators
-from gcopy.utils import attr_cmp, copier, get_globals, get_nonlocals, getcode
+from gcopy.utils import attr_cmp, copier, get_globals, get_nonlocals, getcode, catch_errors
 
 #########################
 ### testing utilities ###
@@ -443,10 +443,10 @@ def test_generator_block_adjust() -> None:
         "        try:",
         "            pass",
         "        except:",
-        "            locals()['.internals']['.error'] = locals()['.internals']['.exc_info']()[1]",
+        "            locals()['.internals']['.error'] = locals()['.internals']['exc_info']()[1]",
         "        return  3",
         "        locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
-        "        if isinstance(locals()['.internals']['.error'],  locals()['.internals']['.args'].pop()):",
+        "        if locals()['.internals']['.catch_errors'](locals()['.internals']['.error'], locals()['.internals']['.args'].pop()):",
         "            locals()['.continue_error'] = False",
     ]
     ## additional catch ##
@@ -456,15 +456,15 @@ def test_generator_block_adjust() -> None:
         "        try:",
         "            pass",
         "        except:",
-        "            locals()['.internals']['.error'] = locals()['.internals']['.exc_info']()[1]",
+        "            locals()['.internals']['.error'] = locals()['.internals']['exc_info']()[1]",
         "        return  3",
         "        locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
-        "        if isinstance(locals()['.internals']['.error'],  locals()['.internals']['.args'].pop()):",
+        "        if locals()['.internals']['.catch_errors'](locals()['.internals']['.error'], locals()['.internals']['.args'].pop()):",
         "            locals()['.continue_error'] = False",
         "        else:",
         "            return  3",
         "            locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
-        "            if isinstance(locals()['.internals']['.error'],  locals()['.internals']['.args'].pop()):",
+        "            if locals()['.internals']['.catch_errors'](locals()['.internals']['.error'], locals()['.internals']['.args'].pop()):",
         "                locals()['.continue_error'] = False",
     ]
     ## for ##
@@ -891,6 +891,7 @@ def test_generator__call__() -> None:
             "partial": partial,
             ".args": [],
             ".send": None,
+            "catch_errors": catch_errors,
         },
         "a": 1,
         "b": 2,
@@ -1020,6 +1021,8 @@ def test_generator__next__() -> None:
         "exec_info": exc_info,
         "partial": partial,
         ".args": [],
+        # ".send": None, ## this shouldn't show up
+        "catch_errors": catch_errors,
     }
     assert gen._internals["state"] == gen._internals["source_lines"]
     assert next(gen) == 2
@@ -1397,20 +1400,20 @@ def test_value_yield() -> None:
         try:
             return 1
         except:
-            locals()['.internals']['.error'] = locals()['.internals']['.exc_info']()[1]
+            locals()['.internals']['.error'] = locals()['.internals']['exc_info']()[1]
         return
         locals()['.internals']['.args'] += [locals()['.internals']['.send']]
-        if isinstance(locals()['.internals']['.error'],  locals()['.internals']['.args'].pop()):
+        if locals()['.internals']['.catch_errors'](locals()['.internals']['.error'], locals()['.internals']['.args'].pop()):
             locals()['.continue_error'] = False
             return 2
         else:
             return
             locals()['.internals']['.args'] += [locals()['.internals']['.send']]
-            if isinstance(locals()['.internals']['.error'],  locals()['.internals']['.args'].pop()):
+            if locals()['.internals']['.catch_errors'](locals()['.internals']['.error'], locals()['.internals']['.args'].pop()):
                 locals()['.continue_error'] = False
                 return 3
             else:
-                if isinstance(locals()['.internals']['.error'],  Exception):
+                if locals()['.internals']['.catch_errors'](locals()['.internals']['.error'], Exception):
                     locals()['.continue_error'] = False
                     return 4
                 else:
