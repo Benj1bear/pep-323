@@ -1,23 +1,23 @@
+###################################################
 ## tests are for cleaning + adjusting + pickling ##
-# record_jumps is tested in test_custom_adjustment
+###################################################
 
+# record_jumps is tested in test_custom_adjustment
 #test_generator_block_adjust()  ## finish decorators + definitions e.g. unpack ##
 # test_generator_clean_source_lines()  ## do basic tests for most users to see it working ##
 # Generator__call__ is tested in test_generator__call__
 # test_gen_expr()  ## fix patch_iterators so that it's scoped ##
 # test_value_yield()  ## need to add more test cases ##
 
-import asyncio
-from collections.abc import Iterable
-from typing import Union
+import pytest ## used to make async tests work
+import os ## used in test_picklers for pytest ##
 import pickle
 from functools import partial
 from inspect import currentframe
 from sys import exc_info
-
-# from collections.abc import Iterable, Iterat, AsyncIterable, AsyncIterator
+from collections.abc import Iterable
 from types import AsyncGeneratorType, GeneratorType, NoneType
-from typing import Any
+from typing import Any, Union
 
 from gcopy.custom_generator import (
     EOF,
@@ -26,7 +26,7 @@ from gcopy.custom_generator import (
     Generator,
     Pickler,
     code,
-    frame,
+    frame
 )
 from gcopy.source_processing import (
     append_line,
@@ -38,7 +38,14 @@ from gcopy.source_processing import (
     update_jump_positions,
 )
 from gcopy.track import atrack, patch_iterators
-from gcopy.utils import attr_cmp, copier, get_globals, get_nonlocals, getcode
+from gcopy.utils import (
+    attr_cmp,
+    copier,
+    get_globals,
+    get_nonlocals,
+    getcode,
+    catch_errors
+    )
 
 #########################
 ### testing utilities ###
@@ -179,9 +186,13 @@ def test_Pickler(pickler_test: Pickler = None) -> None:
 
 def test_picklers() -> None:
     _frame = frame(currentframe())
-    _code = code(_frame.f_code)
-    test_Pickler(_code)
-    #test_Pickler(_frame)
+    ## we don't need to wrap in a gcopy.code type since frame does this already ##
+    test_Pickler(_frame.f_code)
+    ## if testing using pytest then we need to remove anything in prior frames ##
+    ## that cannot be pickled. For simplicity we remove the previous frame ##
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        _frame.f_back = None
+    test_Pickler(_frame)
     test_Pickler(Generator())
     test_Pickler(AsyncGenerator())
 
@@ -443,10 +454,10 @@ def test_generator_block_adjust() -> None:
         "        try:",
         "            pass",
         "        except:",
-        "            locals()['.internals']['.error'] = locals()['.internals']['.exc_info']()[1]",
+        "            locals()['.internals']['.error'] = locals()['.internals']['exc_info']()[1]",
         "        return  3",
         "        locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
-        "        if isinstance(locals()['.internals']['.error'],  locals()['.internals']['.args'].pop()):",
+        "        if locals()['.internals']['.catch_errors'](locals()['.internals']['.error'], locals()['.internals']['.args'].pop()):",
         "            locals()['.continue_error'] = False",
     ]
     ## additional catch ##
@@ -456,15 +467,15 @@ def test_generator_block_adjust() -> None:
         "        try:",
         "            pass",
         "        except:",
-        "            locals()['.internals']['.error'] = locals()['.internals']['.exc_info']()[1]",
+        "            locals()['.internals']['.error'] = locals()['.internals']['exc_info']()[1]",
         "        return  3",
         "        locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
-        "        if isinstance(locals()['.internals']['.error'],  locals()['.internals']['.args'].pop()):",
+        "        if locals()['.internals']['.catch_errors'](locals()['.internals']['.error'], locals()['.internals']['.args'].pop()):",
         "            locals()['.continue_error'] = False",
         "        else:",
         "            return  3",
         "            locals()['.internals']['.args'] += [locals()['.internals']['.send']]",
-        "            if isinstance(locals()['.internals']['.error'],  locals()['.internals']['.args'].pop()):",
+        "            if locals()['.internals']['.catch_errors'](locals()['.internals']['.error'], locals()['.internals']['.args'].pop()):",
         "                locals()['.continue_error'] = False",
     ]
     ## for ##
@@ -891,6 +902,7 @@ def test_generator__call__() -> None:
             "partial": partial,
             ".args": [],
             ".send": None,
+            "catch_errors": catch_errors,
         },
         "a": 1,
         "b": 2,
@@ -1020,6 +1032,8 @@ def test_generator__next__() -> None:
         "exec_info": exc_info,
         "partial": partial,
         ".args": [],
+        # ".send": None, ## this shouldn't show up
+        "catch_errors": catch_errors,
     }
     assert gen._internals["state"] == gen._internals["source_lines"]
     assert next(gen) == 2
@@ -1397,20 +1411,20 @@ def test_value_yield() -> None:
         try:
             return 1
         except:
-            locals()['.internals']['.error'] = locals()['.internals']['.exc_info']()[1]
+            locals()['.internals']['.error'] = locals()['.internals']['exc_info']()[1]
         return
         locals()['.internals']['.args'] += [locals()['.internals']['.send']]
-        if isinstance(locals()['.internals']['.error'],  locals()['.internals']['.args'].pop()):
+        if locals()['.internals']['.catch_errors'](locals()['.internals']['.error'], locals()['.internals']['.args'].pop()):
             locals()['.continue_error'] = False
             return 2
         else:
             return
             locals()['.internals']['.args'] += [locals()['.internals']['.send']]
-            if isinstance(locals()['.internals']['.error'],  locals()['.internals']['.args'].pop()):
+            if locals()['.internals']['.catch_errors'](locals()['.internals']['.error'], locals()['.internals']['.args'].pop()):
                 locals()['.continue_error'] = False
                 return 3
             else:
-                if isinstance(locals()['.internals']['.error'],  Exception):
+                if locals()['.internals']['.catch_errors'](locals()['.internals']['.error'], Exception):
                     locals()['.continue_error'] = False
                     return 4
                 else:
@@ -1431,227 +1445,221 @@ async def simple_asyncgenerator():
     yield 2
     yield 3
 
+@pytest.mark.asyncio
+async def test_asyncgenerator_pickle() -> None:
 
-async def async_generator_tests() -> None:
+    gen = AsyncGenerator(simple_asyncgenerator)
 
-    async def test_asyncgenerator_pickle() -> None:
+    attrs_before = dir(gen._internals["frame"])
+    test_Pickler(gen)
+    ## make sure no change in the attrs ##
+    assert attrs_before == dir(gen._internals["frame"])
+    ## instantiate the generator since it's not initialized ##
+    gen = gen()
+    assert await anext(gen) == 1
+    # ## copy the generator ##
+    gen2 = gen.copy()
+    gen3 = gen.copy()
+    assert await anext(gen) == await anext(gen2) == await anext(gen3)
+    assert await anext(gen) == await anext(gen2) == await anext(gen3)
+    prefix = gen._internals["prefix"]
+    for key in ("code", "frame", "suspended", "yieldfrom", "running"):
+        assert hasattr(gen2, prefix + key)
 
-        gen = AsyncGenerator(simple_asyncgenerator)
-
-        attrs_before = dir(gen._internals["frame"])
-        test_Pickler(gen)
-        ## make sure no change in the attrs ##
-        assert attrs_before == dir(gen._internals["frame"])
-        ## instantiate the generator since it's not initialized ##
-        gen = gen()
-        assert await anext(gen) == 1
-        # ## copy the generator ##
-        gen2 = gen.copy()
-        gen3 = gen.copy()
-        assert await anext(gen) == await anext(gen2) == await anext(gen3)
-        assert await anext(gen) == await anext(gen2) == await anext(gen3)
-        prefix = gen._internals["prefix"]
-        for key in ("code", "frame", "suspended", "yieldfrom", "running"):
-            assert hasattr(gen2, prefix + key)
-
-    async def test_asyncgenerator_asend() -> None:
-        ## value yield ##
-        gen = AsyncGenerator()
-        f = frame()
-        f.f_locals = {
-            ".internals": {
-                "EOF": EOF,
-                "exec_info": exc_info,
-                "partial": partial,
-                ".args": [],
-                ".send": None,
-            },
-        }
-        source_lines = [
-            "    return 1",
-            "    return 2",
-            "    a = locals()['.internals']['.send']",
-            "    return a",
-        ]
-        gen._internals.update(
-            {
-                "frame": f,
-                "code": None,
-                "lineno": 1,
-                "source_lines": source_lines,
-                "jump_positions": [],
-                "state": source_lines,
-                "running": False,
-                "suspended": False,
-                "yieldfrom": None,
-                "initialized": True,
-            }
-        )
-        gen._internals["state_generator"] = gen._init_states()
-        ## can't send if not running ##
-        try:
-            await gen.asend(1)
-            assert False
-        except TypeError:
-            pass
-
-        ## send doesn't change non value recieving yields ##
-        assert await anext(gen) == 1
-        assert await gen.asend(1) == 2
-        ## send changes value recieving yield ##
-        assert await gen.asend(1) == 1
-
-    async def test_asyncgenerator_aclose() -> None:
-        gen = AsyncGenerator(simple_asyncgenerator())
-        assert await gen.aclose() is None
-        assert gen._internals["frame"] is None
-
-        @AsyncGenerator
-        def test(case: int = 0) -> Generator:
-            yield 0
-            try:
-                yield 1
-                yield 2
-            except GeneratorExit:
-                if case == 0:
-                    raise GeneratorExit()
-                if case == 1:
-                    yield 4
-                return 30
-
-        gen = test()
-        ## start ##
-        assert await gen.aclose() is None
-        assert gen._internals["frame"] is None
-
-        ### catched ###
-
-        # GeneratorExit #
-        gen = test()
-        await anext(gen)
-        assert await gen.aclose() is None
-        assert gen._internals["frame"] is None
-        # yield #
-        gen = test(1)
-        await anext(gen)
-        try:
-            await gen.aclose()
-            assert False
-        except RuntimeError:
-            pass
-        # return #
-        gen = test(2)
-        await anext(gen)
-        # gen._close()
-        assert await gen.aclose() is None
-        assert gen._internals["frame"] is None
-
-        ## make sure it doesn't run after closing ##
-        assert await anext(gen, True)
-
-    async def test_asyncgenerator_athrow() -> None:
-        gen = AsyncGenerator(simple_asyncgenerator())
-        try:
-            await gen.athrow(ImportError)
-            assert False
-        except ImportError:
-            assert gen._internals["linetable"] == [-1, 0, 1, 2]
-            assert gen._internals["state"] is None
-
-        @AsyncGenerator
-        def test():
-            try:
-                yield 1
-                assert False
-            except ImportError:
-                pass
-            yield 2
-            yield 3
-
-        gen = test()
-
-        assert await gen.athrow(ImportError) == 2
-        assert gen._internals["state"][2:] == gen._internals["source_lines"][1:]
-        assert gen._internals["linetable"] == [0, 0, 1, 2, 3, 4, 5, 6]
-
-    async def test_asyncgenerator_type_checking() -> None:
-        gen = AsyncGenerator()
-        assert isinstance(gen, (AsyncGeneratorType, AsyncGenerator)) and issubclass(
-            type(gen), (AsyncGeneratorType, AsyncGenerator)
-        )
-
-    async def test_asyncgenerator__init__() -> None:
-        ## function generator ##
-        # uninitilized - this should imply that use as a decorator works also ##
-        init_test(simple_asyncgenerator, False, AsyncGenerator, AsyncGeneratorType)
-        # initilized #
-        init_test(simple_asyncgenerator(), True, AsyncGenerator, AsyncGeneratorType)
-        ## generator expression ##
-        gen = (i async for i in atrack(simple_asyncgenerator()))
-        init_test(gen, True, AsyncGenerator, AsyncGeneratorType)
-
-        ## test if the function related attrs get transferred ##
-
-        closure_cell = 1
-
-        def test2(FUNC: Any) -> None:
-            """docstring"""
-            closure_cell
-
-        gen = AsyncGenerator(test2)
-
-        assert gen.__call__.__annotations__ == test2.__annotations__
-        assert gen.__call__.__doc__ == test2.__doc__
-        assert get_nonlocals(gen.__closure__) == get_nonlocals(test2.__closure__)
-
-    async def test_asyncgenerator__anext__() -> None:
-        gen = AsyncGenerator(simple_asyncgenerator())
-        assert gen._internals["state"] == gen._internals["source_lines"]
-        assert await anext(gen) == 1
-        assert gen._locals()[".internals"] == {
+@pytest.mark.asyncio
+async def test_asyncgenerator_asend() -> None:
+    ## value yield ##
+    gen = AsyncGenerator()
+    f = frame()
+    f.f_locals = {
+        ".internals": {
             "EOF": EOF,
             "exec_info": exc_info,
             "partial": partial,
             ".args": [],
+            ".send": None,
+        },
+    }
+    source_lines = [
+        "    return 1",
+        "    return 2",
+        "    a = locals()['.internals']['.send']",
+        "    return a",
+    ]
+    gen._internals.update(
+        {
+            "frame": f,
+            "code": None,
+            "lineno": 1,
+            "source_lines": source_lines,
+            "jump_positions": [],
+            "state": source_lines,
+            "running": False,
+            "suspended": False,
+            "yieldfrom": None,
+            "initialized": True,
         }
-        assert gen._internals["state"] == gen._internals["source_lines"]
-        assert await anext(gen) == 2
-        assert gen._internals["state"] == gen._internals["source_lines"][1:]
-        assert await anext(gen) == 3
-        assert gen._internals["state"] is None
-        assert await anext(gen, True)
-        assert gen._internals["frame"] is None
+    )
+    gen._internals["state_generator"] = gen._init_states()
+    ## can't send if not running ##
+    try:
+        await gen.asend(1)
+        assert False
+    except TypeError:
+        pass
 
-    async def test_asyncgenerator__aiter__() -> None:
-        assert [i async for i in AsyncGenerator(simple_asyncgenerator())] == [1, 2, 3]
+    ## send doesn't change non value recieving yields ##
+    assert await anext(gen) == 1
+    assert await gen.asend(1) == 2
+    ## send changes value recieving yield ##
+    assert await gen.asend(1) == 1
 
-        @AsyncGenerator
-        def gen(*args, **kwargs) -> Generator:
+@pytest.mark.asyncio
+async def test_asyncgenerator_aclose() -> None:
+    gen = AsyncGenerator(simple_asyncgenerator())
+    assert await gen.aclose() is None
+    assert gen._internals["frame"] is None
+
+    @AsyncGenerator
+    def test(case: int = 0) -> Generator:
+        yield 0
+        try:
             yield 1
             yield 2
-            return 3
+        except GeneratorExit:
+            if case == 0:
+                raise GeneratorExit()
+            if case == 1:
+                yield 4
+            return 30
 
-        assert [i async for i in gen()] == [1, 2]
+    gen = test()
+    ## start ##
+    assert await gen.aclose() is None
+    assert gen._internals["frame"] is None
 
-        @AsyncGenerator
-        def test_case():
+    ### catched ###
+
+    # GeneratorExit #
+    gen = test()
+    await anext(gen)
+    assert await gen.aclose() is None
+    assert gen._internals["frame"] is None
+    # yield #
+    gen = test(1)
+    await anext(gen)
+    try:
+        await gen.aclose()
+        assert False
+    except RuntimeError:
+        pass
+    # return #
+    gen = test(2)
+    await anext(gen)
+    # gen._close()
+    assert await gen.aclose() is None
+    assert gen._internals["frame"] is None
+
+    ## make sure it doesn't run after closing ##
+    assert await anext(gen, True)
+
+@pytest.mark.asyncio
+async def test_asyncgenerator_athrow() -> None:
+    gen = AsyncGenerator(simple_asyncgenerator())
+    try:
+        await gen.athrow(ImportError)
+        assert False
+    except ImportError:
+        assert gen._internals["linetable"] == [-1, 0, 1, 2]
+        assert gen._internals["state"] is None
+
+    @AsyncGenerator
+    def test():
+        try:
             yield 1
-            for i in range(3):
-                yield i
+            assert False
+        except ImportError:
+            pass
+        yield 2
+        yield 3
 
-        gen = test_case()
-        ## because it's not from an already running generator ##
-        ## the fishook patches on the iterators are already applied ##
-        assert [i async for i in gen] == [1, 0, 1, 2]
+    gen = test()
 
-    await test_asyncgenerator_pickle()
-    await test_asyncgenerator_asend()
-    await test_asyncgenerator_aclose()
-    await test_asyncgenerator_athrow()
-    await test_asyncgenerator_type_checking()
-    await test_asyncgenerator__init__()
-    await test_asyncgenerator__anext__()
-    await test_asyncgenerator__aiter__()
+    assert await gen.athrow(ImportError) == 2
+    assert gen._internals["state"][2:] == gen._internals["source_lines"][1:]
+    assert gen._internals["linetable"] == [0, 0, 1, 2, 3, 4, 5, 6]
 
-if __name__ == "__main__":
-    asyncio.run(async_generator_tests())
+@pytest.mark.asyncio
+async def test_asyncgenerator_type_checking() -> None:
+    gen = AsyncGenerator()
+    assert isinstance(gen, (AsyncGeneratorType, AsyncGenerator)) and issubclass(
+        type(gen), (AsyncGeneratorType, AsyncGenerator)
+    )
+
+@pytest.mark.asyncio
+async def test_asyncgenerator__init__() -> None:
+    ## function generator ##
+    # uninitilized - this should imply that use as a decorator works also ##
+    init_test(simple_asyncgenerator, False, AsyncGenerator, AsyncGeneratorType)
+    # initilized #
+    init_test(simple_asyncgenerator(), True, AsyncGenerator, AsyncGeneratorType)
+    ## generator expression ##
+    gen = (i async for i in atrack(simple_asyncgenerator()))
+    init_test(gen, True, AsyncGenerator, AsyncGeneratorType)
+
+    ## test if the function related attrs get transferred ##
+
+    closure_cell = 1
+
+    def test2(FUNC: Any) -> None:
+        """docstring"""
+        closure_cell
+
+    gen = AsyncGenerator(test2)
+
+    assert gen.__call__.__annotations__ == test2.__annotations__
+    assert gen.__call__.__doc__ == test2.__doc__
+    assert get_nonlocals(gen.__closure__) == get_nonlocals(test2.__closure__)
+
+@pytest.mark.asyncio
+async def test_asyncgenerator__anext__() -> None:
+    gen = AsyncGenerator(simple_asyncgenerator())
+    assert gen._internals["state"] == gen._internals["source_lines"]
+    assert await anext(gen) == 1
+    assert gen._locals()[".internals"] == {
+        "EOF": EOF,
+        "exec_info": exc_info,
+        "partial": partial,
+        ".args": [],
+        "catch_errors": catch_errors,
+    }
+    assert gen._internals["state"] == gen._internals["source_lines"]
+    assert await anext(gen) == 2
+    assert gen._internals["state"] == gen._internals["source_lines"][1:]
+    assert await anext(gen) == 3
+    assert gen._internals["state"] is None
+    assert await anext(gen, True)
+    assert gen._internals["frame"] is None
+
+@pytest.mark.asyncio
+async def test_asyncgenerator__aiter__() -> None:
+    assert [i async for i in AsyncGenerator(simple_asyncgenerator())] == [1, 2, 3]
+
+    @AsyncGenerator
+    def gen(*args, **kwargs) -> Generator:
+        yield 1
+        yield 2
+        return 3
+
+    assert [i async for i in gen()] == [1, 2]
+
+    @AsyncGenerator
+    def test_case():
+        yield 1
+        for i in range(3):
+            yield i
+
+    gen = test_case()
+    ## because it's not from an already running generator ##
+    ## the fishook patches on the iterators are already applied ##
+    assert [i async for i in gen] == [1, 0, 1, 2]

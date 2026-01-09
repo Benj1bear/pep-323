@@ -1,7 +1,5 @@
 ## getcode, getframe raises a runtime warning because we didn't use the coroutine i.e. in an event loop ##
 ## is_cli is tested in test_cli_findsource ##
-
-import warnings
 from sys import version_info
 from types import CodeType, FrameType
 
@@ -20,6 +18,7 @@ from gcopy.utils import (
     similar_opcode,
     skip,
     try_set,
+    catch_errors
 )
 
 
@@ -72,42 +71,36 @@ def test_getcode() -> None:
     ## generator ##
     assert type(getcode((i for i in (None,)))) == CodeType
 
-    with warnings.catch_warnings():
-        ## raises a runtime warning because we didn't use the coroutine i.e. in an event loop ##
-        warnings.simplefilter("ignore")
+    ## coroutine ##
+    async def t():
+        pass
+    case = t()
+    assert type(getcode(case)) == CodeType
+    case.close()
 
-        ## coroutine ##
-        async def t():
-            pass
-
-        assert type(getcode(t())) == CodeType
-
-        ## async generator ##
-        async def t():
-            yield 1
-
-        assert type(getcode(t())) == CodeType
-
+    ## async generator ##
+    async def t():
+        yield 1
+    case = t()
+    assert type(getcode(case)) == CodeType
+    case.aclose()
 
 def test_getframe() -> None:
     ## generator ##
     assert type(getframe((i for i in (None,)))) == FrameType
 
-    with warnings.catch_warnings():
-        ## raises a runtime warning because we didn't use the coroutine i.e. in an event loop ##
-        warnings.simplefilter("ignore")
-
-        ## coroutine ##
-        async def t():
-            pass
-
-        assert type(getframe(t())) == FrameType
-
-        ## async generator ##
-        async def t():
-            yield 1
-
-        assert type(getframe(t())) == FrameType
+    ## coroutine ##
+    async def t():
+        pass
+    case = t()
+    assert type(getframe(case)) == FrameType
+    case.close()
+    ## async generator ##
+    async def t():
+        yield 1
+    case = t()
+    assert type(getframe(case)) == FrameType
+    case.aclose()
 
 
 def test_hasattrs() -> None:
@@ -191,3 +184,21 @@ def test_code_cmp() -> None:
     assert code_cmp(test("lambda: j"), test_case())
     ## different code objects ##
     assert code_cmp(test("lambda x: x"), test("lambda x: x + 1")) == False
+
+def test_catch_errors() -> None:
+    from sys import exc_info
+
+    if version_info >= (3, 11):
+        ## ExceptionGroup ##
+        try:
+            raise ExceptionGroup('', (AssertionError(), TypeError(), ValueError()))
+        except:
+            exc = exc_info()[1]
+            assert catch_errors(exc, AssertionError, TypeError, ValueError)
+            assert catch_errors(exc, AssertionError, TypeError, OSError) == False
+    ## single Exception ##
+    try:
+        raise TypeError()
+    except (AssertionError, TypeError, ValueError):
+        exc = exc_info()[1]
+        assert catch_errors(exc, AssertionError, TypeError, ValueError)

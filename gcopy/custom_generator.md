@@ -398,5 +398,7 @@ You should see that I've made a custom ```code``` and ```frame``` class that als
 
   - f-strings are unpacked. We could check if they need to be unpacked however it's likely about the same or worse than being unpacked without checking.
 
+  - case statements in python cannot take yields and therefore no adjustments needed in terms of yield.
+
   - Because bytecode changes with python versions the main functions to look out for in terms of
   instability should start likely with the functions found in utils.py: code_setup, code_attrs, similar opcode, and code_cmp. Though, code_setup is likely the only and most unstable of them that needs review per version change.

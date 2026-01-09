@@ -1,11 +1,16 @@
 ##################################
 ### picklable/copyable objects ###
 ##################################
+from sys import exc_info, version_info
+## minimum version supported ##
+if version_info < (3, 5):
+    raise ImportError("Python version 3.5 or above is required")
+
 from copy import copy, deepcopy
 
 from functools import partial
 from inspect import getsource
-from sys import exc_info, version_info
+
 from textwrap import dedent
 from types import (
     AsyncGeneratorType,
@@ -41,19 +46,16 @@ from gcopy.utils import (
     get_nonlocals,
     getcode,
     getframe,
-    hasattrs
+    hasattrs,
+    catch_errors
 )
+
 
 try:
     from typing import NoReturn
 except:
     ## for 3.5 since 3.6.2; there might be alternatives that are better than this for 3.5 ##
     NoReturn = {"NoReturn"}
-
-
-## minimum version supported ##
-if version_info < (3, 5):
-    raise ImportError("Python version 3.5 or above is required")
 
 
 class Pickler:
@@ -124,6 +126,11 @@ class code(Pickler):
 
     def __eq__(self, obj: Any) -> bool:
         return attr_cmp(self, obj, self._attrs)
+    
+    def __repr__(self) -> str:
+        code = getattr(self, "co_code", None)
+        code_attr = (getattr(code,"co_name", ""), getattr(code,"co_filename", ""), getattr(self,"f_lineno",""))
+        return super().__repr__()[:-1] + " %s, file '%s', line %s>" % code_attr
 
 
 class frame(Pickler):
@@ -186,6 +193,11 @@ class frame(Pickler):
     def __setstate__(self, state: dict) -> None:
         Pickler.__setstate__(self, state)
         self.f_globals = get_globals()
+
+    def __repr__(self) -> str:
+        code = getattr(self, "co_code", None)
+        code_attr = (getattr(code,"co_name", ""), getattr(code,"co_filename", ""), getattr(self,"f_lineno",""))
+        return super().__repr__()[:-1] + ", file '%s', line %s, code %s>" % (code_attr[1:] + (code_attr[0],))
 
 
 class EOF(StopIteration, StopAsyncIteration):
@@ -372,6 +384,7 @@ class BaseGenerator:
                 "partial": partial,
                 ".args": [],
                 ".send": None,
+                'catch_errors': catch_errors,
             }
             if ".internals" not in f_locals:
                 f_locals[".internals"] = internals

@@ -15,6 +15,7 @@ from gcopy.source_processing import (
     collect_string,
     control_flow_adjust,
     except_adjust,
+    except_catch_adjust,
     expr_getsource,
     extract_as,
     end_offset_adjust,
@@ -241,6 +242,9 @@ def test_inverse_bracket() -> None:
 def test_is_item() -> None:
     assert is_item("a")
     assert is_item("a)") == False
+    assert is_item("await b")
+    assert is_item("await b)") == False
+    assert is_item("yield from g")
 
 
 def test_unpack() -> None:
@@ -924,7 +928,7 @@ def test_loop_adjust() -> None:
     assert loop_adjust(block[2:], indexes[2:], block[1:], *(1, length)) == (
         [
             "    locals()['.internals']['.continue']=True",
-            "    for _ in (None,):",
+            "    for _ in (locals().get('_'),):",
             "        break",
             "        locals()['.internals']['.continue']=False",
             "        break",
@@ -1046,9 +1050,9 @@ def test_extract_source_from_comparison() -> None:
     print(1)
     return 1"""
     ## make sure strictness is validated ##
-    def test(error: Exception, *args, **kwargs) -> None:
+    def test(error: Exception, *args, strictness: int) -> None:
         try:
-            extract_source_from_comparison(*args, **kwargs)
+            extract_source_from_comparison(*args, strictness=strictness)
         except error:
             return
         raise AssertionError("Error %s not raised for strictness %s" % (error, strictness))
@@ -1236,21 +1240,38 @@ def test_except_adjust() -> None:
     try:
         pass
     except:
-        locals()['.internals']['.error'] = locals()['.internals']['.exc_info']()[1]
+        locals()['.internals']['.error'] = locals()['.internals']['exc_info']()[1]
     return value
     locals()['.internals']['.args'] += [locals()['.internals']['.send']]
-    if isinstance(locals()['.internals']['.error'],  locals()['.internals']['.args'].pop()):
+    if locals()['.internals']['.catch_errors'](locals()['.internals']['.error'], locals()['.internals']['.args'].pop()):
         locals()['.continue_error'] = False"""
     assert "\n".join(result[0]) == answer
     assert result[1] == 0
 
 
 def test_extract_as() -> None:
-    assert extract_as("except Exception as e:") == ("except Exception", " e:")
+    assert extract_as("except Exception as e:") == ("except Exception", "e:")
 
 
 def test_except_catch_adjust() -> None:
-    pass
+    reference = [
+        '        a',
+        '        b',
+        '        c',
+        "        if locals()['.internals']['.catch_errors'](locals()['.internals']['.error'], Exception):",
+        "            locals()['.continue_error'] = False",
+        "            e = locals()['.internals']['.error']"
+        ]
+    ## with as keyword and multiple lines ##
+    assert except_catch_adjust("    except Exception as e:", ["a","b","c"]) == reference
+    ## exception groups ##
+    if version_info >= (3, 11):
+        assert except_catch_adjust("    except* Exception as e :", ["a","b","c"]) == reference
+    reference.pop()
+    ## without as keyword ##
+    assert except_catch_adjust("    except Exception:", ["a","b","c"]) == reference
+    ## without multiple lines ##
+    assert except_catch_adjust("    except Exception:", []) == reference[3:]
 
 
 def test_singly_space() -> None:
@@ -1393,3 +1414,5 @@ def test_sign() -> None:
     assert signature(f) == signature(test)
     assert f.__doc__ == test.__doc__
     assert f.__annotations__ == test.__annotations__
+
+

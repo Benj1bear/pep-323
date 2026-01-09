@@ -325,3 +325,48 @@ class Wrapper:
 
     def __setstate__(self, state: dict) -> None:
         self.__init__(state["obj"])
+
+
+def get_state(self) -> str:
+    """
+    returns the state of the generator as a string
+    based on the internal state regardless of i.e. async
+    or not.
+
+    In general, this should be a stand alone funtion 
+    but classes may choose to use this as a property.
+
+    Note: follows on from the inspect module 
+    e.g. inspect.getgeneratorstate and inspect.getasyncgenstate
+    e.g. see:
+    https://github.com/python/cpython/blob/cbf9b8cc08364cdcf355fe1c897f698331b49a41/Lib/inspect.py#L1806C1-L1821C23
+    and
+    https://github.com/python/cpython/blob/cbf9b8cc08364cdcf355fe1c897f698331b49a41/Lib/inspect.py#L1887C1-L1902C24
+    respectively
+    """
+    state: dict.get = self._internals.get
+    if state("running"):
+        return "RUNNING"
+    if state("suspended"):
+        return "SUSPENDED"
+    if state("frame"):
+        return "CREATED"
+    return "CLOSED"
+
+
+if version_info < (3,11):
+    ## it shouldn't matter what this is set to as long as it doesn't have .exceptions attribute ##
+    ExceptionGroup = None
+
+
+def catch_errors(error: BaseException, *filter: tuple[BaseException]) -> bool:
+    """
+    checks if an error is in filter
+
+    If the error is an ExceptionGroup all exceptions must be in filter to be caught
+    otherwise any exceptions that are in filter they will be caught
+    """
+    if hasattr(error, "exceptions") and ExceptionGroup not in filter:
+        ## all of error must be in filter ##
+        return all(any(isinstance(exception, subgroup) for subgroup in filter) for exception in error.exceptions)
+    return any(isinstance(error, exception) for exception in filter)

@@ -1,7 +1,5 @@
-import asyncio
-from collections.abc import Iterable, Iterator
+import pytest ## used to make async tests work
 import builtins
-from typing import Union
 
 from gcopy.track import (
     atrack,
@@ -13,20 +11,6 @@ from gcopy.track import (
     track_shift,
     unpatch_iterators,
 )
-
-
-def iter_init(obj: Union[Iterable, Iterator]) -> Iterable:
-    """Initializes iterators (for testing)"""
-    if obj.__name__ in ("memoryview",):
-        return iter(obj(b"abcedfg"))
-    elif obj.__name__ in ("enumerate", "reversed"):
-        return iter(obj([]))
-    elif obj.__name__ == "range":
-        return iter(obj(2))
-    elif obj.__name__ in ("zip", "filter", "map"):
-        return iter(obj([], []))
-    else:
-        return iter(obj())
 
 
 def test_track_adjust() -> None:
@@ -112,7 +96,7 @@ def test_track() -> None:
     iter(track([1, 2, 3]))
     assert [i for i in locals()[".internals"][".4"]] == [1, 2, 3]
 
-
+@pytest.mark.asyncio
 async def test_atrack() -> None:
     async def iterator():
         yield 1
@@ -122,8 +106,3 @@ async def test_atrack() -> None:
     assert [i async for i in atrack(iterator())] == [1, 2, 3]
     aiter(atrack(iterator()))
     assert [i async for i in locals()[".internals"][".4"]] == [1, 2, 3]
-
-
-if __name__ == "__main__":
-    # TODO can remove, simply run pytest .
-    asyncio.run(test_atrack())

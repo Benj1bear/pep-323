@@ -145,10 +145,7 @@ Note: the internal variables ```.send, .frame, .self``` will be available during
 
 source_processing:
 
-  - test_except_catch_adjust (has no tests written)
-  - test closing up of brackets for both unpack + clean_source_lines (recent fixes that used is_item)
-  - test recent fix in is_item at test_is_item (async fix)
-  - unpack + clean_source_lines recent issues + fixes
+  - unpack + clean_source_lines recent issues + fixes (bracket issues) (indentation of unpacked lines, closing up of brackets, and bracketed (open brackets) expressions, exceptions, ExceptionGroups, nested exceptions) -- need to fix newlines and comments handling
 
 ### Review for testing:
 
@@ -158,21 +155,8 @@ source_processing:
 - decorators needs checking
 - value yields e.g. decorators/functions/ternary
 - loops
-- indentation of lines from unpacking in clean_source_lines needs checking
-
-Initialized Generators:
-- check the lineno from unpacking for initialized generators
-  - check that all unpacked lines are indented where necessary
-    and indentation of future lines must also be considered
-- lineno for initialized generators needs checking
 
 check block_adjust
-
-unpack:
-- check the line continuation is adjusting correctly
-or consider removing char in " \\" case since it's
-only for formatting
-
 
 version specific:
 
@@ -181,10 +165,34 @@ version specific:
 - in python 3.14 exceptions don't need brackets
 
 ### Figure out later:
+  Initialized Generators:
+  - lineno for initialized generators needs checking
+  - check the lineno from unpacking for initialized generators
+    - check that all unpacked lines are indented where necessary and indentation of future lines must also be considered
+
+    Additional notes on this:
+    will need to create an instruction index linetable. Needed to know where to start for initialized
+    generators. Though will not know what the prior send values are so will have to run the unpacked
+    lines regardless of what the prior send values are or None if there are no prior send values or these
+    are not retrievable.
+    i.e.
+    e.g. line -> instruction index -> unpacked line range
+    ```python
+    instr_linetable = {
+        1: { # key = lineno -> value = dict of # key = instruction index -> value = range in source code
+            0: [0,3],
+            3: [12,23]
+        }
+    }
+    ```
   - fix and/or add lineno adjust. Then use this for compound statements tracking
   - try to implement ag_await for AsyncGenerator if possible (then test this)
+  - enhance code comparisons for source_code_from_comparison for better extraction
 
   utils:
   - test utils.cli_getsource
   - determine the initial lineno given encapsulated yield and the send values for initialized generators
     - test_lambda_expr in test_custom_generator for encapsulated yields
+
+  generators:
+  - test_lambda_expr in test_custom_generator for encapsulated yields
