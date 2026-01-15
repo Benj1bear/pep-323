@@ -134,7 +134,7 @@ def test_try_set() -> None:
 
 
 def test_get_globals() -> None:
-    assert get_globals() == globals()
+    assert get_globals("test_get_globals") == globals()
 
 
 def test_similar_opcode() -> None:
@@ -202,3 +202,4 @@ def test_catch_errors() -> None:
     except (AssertionError, TypeError, ValueError):
         exc = exc_info()[1]
         assert catch_errors(exc, AssertionError, TypeError, ValueError)
+

@@ -227,13 +227,15 @@ def patch_iterators(scope: dict = None) -> None:
         frame = currentframe()
         scope = frame.f_back.f_locals
     elif isinstance(scope, FunctionType):
-        temp_globals = scope.__globals__ 
-        temp_globals.update(patches)
+        ## for some reason the scopes don't work with dict.update e.g. # temp_globals = scope.__globals__;temp_globals.update(patches)##
+        ## might be because of using as pointers rather than creating a separate new dict ##
+        temp_globals = {**scope.__globals__, **patches} #  scope.__globals__ | patches ## is also possible
         return FunctionType(scope.__code__, temp_globals, scope.__name__, scope.__defaults__, scope.__closure__)
     if not isinstance(scope, dict):
         raise TypeError("expected type 'dict' but recieved '%s'" % type(scope).__name__)
     scope.update(patches)
-    if frame and version_info < (3, 11):
+    ## prior to PEP 667 ##
+    if frame and version_info < (3, 13):
         ctypes.pythonapi.PyFrame_LocalsToFast(ctypes.py_object(frame), ctypes.c_int(0))
 
 
@@ -248,6 +250,6 @@ def unpatch_iterators(scope: dict = None) -> None:
     ## Note: Can't change syntactical initiations e.g. (,), [], {}, and {...:...} ##
     for name in patches.keys():
         scope.pop(name, None)
-    if frame and version_info < (3, 11):
+    ## prior to PEP 667 ##
+    if frame and version_info < (3, 13):
         ctypes.pythonapi.PyFrame_LocalsToFast(ctypes.py_object(frame), ctypes.c_int(1))
-

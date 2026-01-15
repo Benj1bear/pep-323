@@ -137,7 +137,7 @@ async def function():pass"""
     assert skip_source_definition(source) == "pass"
 
 
-def aux_test(source: str, f_string: bool = False) -> tuple[Iterable, str, str]:
+def aux_test(source: str, f_string: int = 0) -> tuple[Iterable, str, str]:
     """for setting up the string collector tests"""
     source_iter = enumerate(source)
     for i in range(1 + f_string):
@@ -160,7 +160,7 @@ def test_collect_string() -> None:
     ## f-string ##
 
     # single bracket #
-    source_iter, char, source = aux_test('f"asdf{(yield 3)}" -----', True)
+    source_iter, char, source = aux_test('f"asdf{(yield 3)}" -----', 1)
     assert collect_string(source_iter, 0, char, source) == (
         17,
         [
@@ -171,7 +171,7 @@ def test_collect_string() -> None:
         0,
     )
     # double bracket #
-    source_iter, char, source = aux_test('f"asdf{{(yield 3)}}"', True)
+    source_iter, char, source = aux_test('f"asdf{{(yield 3)}}"', 1)
     assert collect_string(source_iter, 0, char, source) == (
         19,
         ['"asdf{{(yield 3)}}"'],
@@ -1414,5 +1414,3 @@ def test_sign() -> None:
     assert signature(f) == signature(test)
     assert f.__doc__ == test.__doc__
     assert f.__annotations__ == test.__annotations__
-
-

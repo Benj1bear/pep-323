@@ -132,10 +132,14 @@ def try_set(self, key: Any, value: Any, default: Any = None) -> None:
         self[key] = value
 
 
-def get_globals() -> dict:
-    """Gets the globals of the originating module that was called from"""
+def get_globals(scope: str ="<module>") -> dict:
+    """
+    Gets the globals of the originating scope that was called from
+    
+    Defaults to the topmost module
+    """
     frame = currentframe()
-    while frame.f_code.co_name != "<module>":
+    while frame.f_code.co_name != scope:
         frame = frame.f_back
     return frame.f_globals
 

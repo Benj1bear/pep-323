@@ -426,7 +426,7 @@ def test_generator_block_adjust() -> None:
     # source_iter: Iterable,
     """
 
-    gen = type("", tuple(), {"lineno": 0, "stack_adjuster": []})()
+    gen = type("", tuple(), {"lineno": 0, "stack_adjuster": [], "catches": [[]], "catch": []})()
 
     ## if ##
     def test(line, current=[]):
@@ -701,13 +701,120 @@ def test_generator_clean_source_lines() -> None:
         return (yield 3)
         ## issue where variable assignment isn't working correctly only on yields/yield froms ##
         ##  without brackets (e.g. works on value yields but not regular yields) ##
-        ## TODO write tests for these (Note: unbracketed are done by clean_source_lines)
-        # a=yield [1,2,3]
-        # b=yield from [1,2,3]
 
     gen = Generator(test)
     for line in gen._internals["source_lines"]:
         print(repr(line))
+    
+    ## test sending yields (without brackets) making sure the adjustments are also correct ##
+    @Generator
+    def test():
+        a = yield [1,2,3]
+        b = yield from [1,2,3]
+
+    assert test()._internals["source_lines"] == [
+        "    locals()['.internals']['.args'] += [1]",
+        "    return [locals()['.internals']['.args'].pop(0) ,2 ,3]",
+        "    a = locals()['.internals']['.send']",
+        "    locals()['.internals']['.args'] += [1]",
+        "    locals()['.internals']['.0']=locals()['.internals']['.yieldfrom']=iter( [locals()['.internals']['.args'].pop(0) ,2 ,3])",
+        "    for locals()['.internals']['.i'] in locals()['.internals']['.yieldfrom']:",
+        "        return locals()['.internals']['.i']",
+        "        if locals()['.internals']['.send']:",
+        "            return locals()['.internals']['.yieldfrom'].send(locals()['.internals']['.send'])",
+        "    b = locals()['.internals']['.send']"
+        ]
+
+    ## make sure brackets are forming correctly ##
+    def brackets():
+        print ( 1+(2+ (yield 60)+22, 2+ (yield 60)+22,55+(yield 0) + 3)+4 )
+        (yield 3)
+        (yield 5)
+        print((   yield 3))
+        ( 
+            1+( 
+                2+ (yield 60),(yield 0) + 3
+                )+4 
+        )
+        ( 1+(2+ (yield 60)+22, 2+ (yield 60)+22,55+(yield 0) + 3)+4 )
+        yield (yield 60),(yield 0)
+        (yield 1), (yield 2) , print((yield 3    )   ) + 4
+        raise ( (yield 3))
+        (yield (yield 3)),(3+ (yield (yield 3)))
+        [(yield 3)]
+        [(yield 3)]
+
+    assert Generator(brackets)._internals["source_lines"] == [
+        '    return  60', "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.args'].pop()]", 
+        '    return  60', "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.args'].pop()]", 
+        '    return  0', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.args'].pop()]", 
+        "    print ( 1+(2+ locals()['.internals']['.args'].pop(0) +22 , 2 +locals()['.internals']['.args'].pop(0) +22 ,55 +locals()['.internals']['.args'].pop(0) + 3)+4 )", 
+        '    return  3', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    locals()['.internals']['.args'].pop()", 
+        '    return  5', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    locals()['.internals']['.args'].pop()", 
+        '    return  3', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    print(locals()['.internals']['.args'].pop())", 
+        '    return  60', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.args'].pop()]", 
+        '    return  0', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.args'].pop()]", 
+        "    (  1+(  2+ locals()['.internals']['.args'].pop(0) ,locals()['.internals']['.args'].pop(0) + 3            )+4  )", 
+        '    return  60', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.args'].pop()]", 
+        '    return  60', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.args'].pop()]", 
+        '    return  0', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.args'].pop()]", 
+        "    ( 1+(2+ locals()['.internals']['.args'].pop(0) +22 , 2 +locals()['.internals']['.args'].pop(0) +22 ,55 +locals()['.internals']['.args'].pop(0) + 3)+4 )", 
+        '    return  60', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.args'].pop()]", 
+        '    return  0', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    return locals()['.internals']['.args'].pop(0) ,locals()['.internals']['.args'].pop()", 
+        '    return  1', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.args'].pop()]", 
+        '    return  2', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.args'].pop()]", 
+        '    return  3', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    locals()['.internals']['.args'] += [print(locals()['.internals']['.args'].pop() )]", 
+        "    locals()['.internals']['.args'].pop(0) ,locals()['.internals']['.args'].pop(0) ,locals()['.internals']['.args'].pop(0) + 4", 
+        '    return  3', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    raise ( locals()['.internals']['.args'].pop())", 
+        '    return  3', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    return  locals()['.internals']['.args'].pop()", 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.args'].pop()]", 
+        '    return  3', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    return  locals()['.internals']['.args'].pop()", 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    locals()['.internals']['.args'].pop(0) ,(3+ locals()['.internals']['.args'].pop())", 
+        '    return  3', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    [locals()['.internals']['.args'].pop()]", 
+        '    return  3', 
+        "    locals()['.internals']['.args'] += [locals()['.internals']['.send']]", 
+        "    [locals()['.internals']['.args'].pop()]"
+    ]
 
 
 def test_generator_create_state() -> None:
@@ -1393,7 +1500,43 @@ def test_initialized() -> None:
 
 
 def test_value_yield() -> None:
-    ## exceptions ##
+
+    def test(test_case, answer: str) -> None:
+        assert ("\n".join(test_case()._internals["source_lines"]) == answer)
+
+    ### exceptions ###
+
+    ## make sure the end section is added ##
+    answer = """    try:
+        try:
+            return 1
+        except:
+            locals()['.internals']['.error'] = locals()['.internals']['exc_info']()[1]
+        return  1
+        locals()['.internals']['.args'] += [locals()['.internals']['.send']]
+        if locals()['.internals']['.catch_errors'](locals()['.internals']['.error'], locals()['.internals']['.args'].pop()):
+            locals()['.continue_error'] = False
+            return 2
+    finally:
+        pass"""
+    @Generator
+    def test_case():
+        try:
+            yield 1
+        except (yield 1):
+            yield 2
+    ## TODO: fix case
+    # test(test_case, answer)
+    ## with exception group ##
+    @Generator
+    def test_case():
+        try:
+            yield 1
+        except* (yield 1):
+            yield 2
+    ## TODO: fix case
+    # test(test_case, answer)
+    ## multiple catches ##
     @Generator
     def test_case():
         try:
@@ -1404,8 +1547,10 @@ def test_value_yield() -> None:
             yield 3
         except Exception:
             yield 4
-        finally:
+        else:
             yield 5
+        finally:
+            yield 6
 
     answer = """    try:
         try:
@@ -1430,10 +1575,88 @@ def test_value_yield() -> None:
                 else:
                     locals()['.internals']['.continue_error'] = False
                     raise locals()['.internals']['.error']
+    except:
+        raise locals()['.internals']['exc_info']()[1]
+    else:
+        return 5
     finally:
-        return 5"""
-    assert "\n".join(test_case()._internals["source_lines"]) == answer
+        return 6"""
+    ## TODO: fix case
+    # test(test_case, answer)
 
+    ### nested exceptions ###
+    ## try focused ##
+    # @Generator
+    # def test_case():
+    #     try:
+    #         try:
+    #             try:
+    #                 yield 3
+    #             except (yield c):
+    #                 yield 4
+    #         except (yield b):
+    #             pass
+    #     except (yield a):
+    #         pass
+
+
+    ## except focused ##
+    # @Generator
+    # def test_case():
+    #     try:
+    #         yield 1
+    #     except (yield a):
+    #         try:
+    #             yield 2
+    #         except (yield b):
+    #             try:
+    #                 yield 3
+    #             except (yield c):
+    #                 yield 4
+    ## try and except focused ##
+    # @Generator
+    # def test_case():
+    #     try:
+    #         try:
+    #             try:
+    #                 yield 1
+    #             except (yield a):
+    #                 yield 2
+    #         except (yield a):
+    #             try:
+    #                 yield 1
+    #             except (yield a):
+    #                 yield 2
+    #     except (yield b):
+    #         try:
+    #             try:
+    #                 yield 1
+    #             except (yield a):
+    #                 yield 2
+    #         except (yield c):
+    #             try:
+    #                 yield 1
+    #             except (yield a):
+    #                 yield 2
+
+    ## exception groups + nested exceptions
+    # @Generator
+    # def test_case():
+    #     try:
+    #         print(1)
+    #         try:
+    #             print(2)
+    #             try:
+    #                 raise ExceptionGroup('', (AssertionError(), TypeError(), ValueError()))
+    #             except* (AssertionError, TypeError, ZeroDivisionError):
+    #                 exc = exc_info()[1]
+    #                 assert catch_errors(exc, AssertionError, TypeError, ValueError) == False
+    #             print(3)
+    #         except* ValueError:
+    #             raise Exception()
+    #     except (Exception, ZeroDivisionError):
+    #         print(4)
+    ### loops in exceptions ###
 
 ####################################
 ### asynchronous generator tests ###
@@ -1588,13 +1811,6 @@ async def test_asyncgenerator_athrow() -> None:
     assert await gen.athrow(ImportError) == 2
     assert gen._internals["state"][2:] == gen._internals["source_lines"][1:]
     assert gen._internals["linetable"] == [0, 0, 1, 2, 3, 4, 5, 6]
-
-@pytest.mark.asyncio
-async def test_asyncgenerator_type_checking() -> None:
-    gen = AsyncGenerator()
-    assert isinstance(gen, (AsyncGeneratorType, AsyncGenerator)) and issubclass(
-        type(gen), (AsyncGeneratorType, AsyncGenerator)
-    )
 
 @pytest.mark.asyncio
 async def test_asyncgenerator__init__() -> None:

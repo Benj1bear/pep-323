@@ -145,7 +145,10 @@ Note: the internal variables ```.send, .frame, .self``` will be available during
 
 source_processing:
 
-  - unpack + clean_source_lines recent issues + fixes (bracket issues) (indentation of unpacked lines, closing up of brackets, and bracketed (open brackets) expressions, exceptions, ExceptionGroups, nested exceptions) -- need to fix newlines and comments handling
+  - unpack + clean_source_lines recent issues + fixes (nested exceptions, linenos + linetable effects that may need adjusting)
+  - test fr / rf type strings and t-strings
+  - test for exceptions without brackets for python 3.14 where exceptions don't need brackets
+  - adjust all tests that integrate the use of the 'synthetic '.0' argument e.g. gnereator expressions e.g. gen.gi_frame.f_locals['.0']
 
 ### Review for testing:
 
@@ -160,9 +163,7 @@ check block_adjust
 
 version specific:
 
-- in python 3.14 t-strings were added (treat as f-strings on unpacking)
 - in python 3.12 you can arbitarily do nested f-strings but in earlier versions you cannot (update the nesting checker in the string_collectors)
-- in python 3.14 exceptions don't need brackets
 
 ### Figure out later:
   Initialized Generators:
