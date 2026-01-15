@@ -58,6 +58,9 @@ def test_patch_iterators() -> None:
 
 
 def test_track_iter() -> None:
+    ## for some reason pytest calls - NameError: name 'patch_iterators' is not defined ?? ##
+    ## even though we've already imported it... ##
+    from gcopy.track import patch_iterators
     patch_iterators(globals())
     ## range iterators (uses hook) ##
     for i in range(3):
@@ -102,6 +105,9 @@ async def test_atrack() -> None:
         yield 1
         yield 2
         yield 3
+    ## for some reason pytest calls - NameError: name 'atrack' is not defined ?? ##
+    ## even though we've already imported it... ##
+    from gcopy.track import atrack
 
     assert [i async for i in atrack(iterator())] == [1, 2, 3]
     aiter(atrack(iterator()))

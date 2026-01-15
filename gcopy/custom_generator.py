@@ -253,6 +253,9 @@ class BaseGenerator:
 
     __copy__, __deepcopy__, copy = Pickler.__copy__, Pickler.__deepcopy__, Pickler.copy
 
+    def __repr__(self) -> str:
+        return super().__repr__()[:-1] + ", Initialized: %s>" % getattr(self, "_internals", {}).get("initialized", "")
+    
     def _api_setup(self) -> None:
         """sets up the api; subclasses should override this method for alternate api setup"""
         self._internals = {
@@ -395,14 +398,12 @@ class BaseGenerator:
     def _init_states(self) -> GeneratorType:
         """Initializes the state generation as a generator"""
         if not self._internals["initialized"]:
-            try:
-                raise TypeError("Cannot iterate an uninitialized function generator")
-            finally:
-                ## reset the state_generator to preserve the exception 
-                ## (otherwise it'll become a StopIteration error for subsequent 
-                ## uses (since it'll become an empty generator) which is 
-                ## unusual/unexpected behavior) ##
-                self._internals["state_generator"] = self._init_states()
+            ## reset the state_generator to preserve the exception 
+            ## (otherwise it'll become a StopIteration error for subsequent 
+            ## uses (since it'll become an empty generator) which is 
+            ## unusual/unexpected behavior) ##
+            self._internals["state_generator"] = self._init_states()
+            raise TypeError("Cannot iterate an uninitialized function generator")
         self._internals["loops"] = get_loops(self._internals["lineno"], self._internals.get("jump_positions", []))
         ## if no state then it must be EOF ##
         while self._internals["state"]:
@@ -540,8 +541,8 @@ class BaseGenerator:
         for attr in (".send", ".frame", ".self"):
             f_locals[".internals"].pop(attr, None)
 
-        if ".yieldfrom" in _frame.f_locals[".internals"]:
-            self._internals["yieldfrom"] = _frame.f_locals[".internals"][".yieldfrom"]
+        if ".yieldfrom" in f_locals[".internals"]:
+            self._internals["yieldfrom"] = f_locals[".internals"][".yieldfrom"]
 
         #### update lineno ####
 

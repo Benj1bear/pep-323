@@ -3,7 +3,7 @@ Copyable Iterators (Generators)
 
 This repo tries to implement a way of copying iterators.
 
-We use code inspection and execution for achiving the result.
+We use code inspection and execution for achieving the result.
 
 
 we create a new piece of code and use exec for producing a new generator
@@ -145,24 +145,18 @@ Note: the internal variables ```.send, .frame, .self``` will be available during
 
 source_processing:
 
-  - unpack + clean_source_lines recent issues + fixes (bracket issues) (indentation of unpacked lines, closing up of brackets, and bracketed (open brackets) expressions, exceptions, ExceptionGroups, nested exceptions) -- need to fix newlines and comments handling
+  - unpack (add in value yield tests)
+  - clean_source_lines (nested exceptions, linenos + linetable effects that may need adjusting, jump_positions needs testing)
+  - test fr / rf type strings and t-strings and nested f and t strings for version < 3.12 and versions that came after
 
 ### Review for testing:
 
   clean_source_lines:
   
+- loops (check jump_positions + that they work on useage)
 - collect_lambda needs checking
-- decorators needs checking
 - value yields e.g. decorators/functions/ternary
-- loops
-
-check block_adjust
-
-version specific:
-
-- in python 3.14 t-strings were added (treat as f-strings on unpacking)
-- in python 3.12 you can arbitarily do nested f-strings but in earlier versions you cannot (update the nesting checker in the string_collectors)
-- in python 3.14 exceptions don't need brackets
+- block_adjust
 
 ### Figure out later:
   Initialized Generators:
@@ -187,7 +181,7 @@ version specific:
     ```
   - fix and/or add lineno adjust. Then use this for compound statements tracking
   - try to implement ag_await for AsyncGenerator if possible (then test this)
-  - enhance code comparisons for source_code_from_comparison for better extraction
+  - enhance code comparisons for extract_source_from_comparison for better extraction. Also check the NameError exception for the .0 argument cases.
 
   utils:
   - test utils.cli_getsource
